@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { SemesterCard } from '../components/SemesterCard';
 
+// Define API base URL
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+
 export const HomePage = () => {
   const [semesters, setSemesters] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13,14 +16,30 @@ export const HomePage = () => {
 
   const fetchSemesters = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/semesters');
+      setLoading(true);
+      setError(null);
+      
+      console.log('Fetching from:', `${API_BASE_URL}/api/semesters`);
+      
+      // Use the API_BASE_URL constant
+      const response = await axios.get(`${API_BASE_URL}/api/semesters`);
       setSemesters(response.data);
+      
+      console.log('Semesters loaded:', response.data);
     } catch (err) {
-      setError('Erreur lors du chargement des semestres');
-      console.error(err);
+      const errorMessage = err.response?.data?.error || 
+                          err.message || 
+                          'Erreur lors du chargement des semestres';
+      setError(errorMessage);
+      console.error('Error fetching semesters:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Retry function for failed requests
+  const handleRetry = () => {
+    fetchSemesters();
   };
 
   // Enhanced container style with subtle background
@@ -30,7 +49,7 @@ export const HomePage = () => {
     gap: 'clamp(1.5rem, 4vw, 2.2rem)',
     justifyContent: 'center',
     alignItems: 'center',
-    top:'100px',
+    top: '100px',
     minHeight: 'auto',
     padding: 'clamp(1.5rem, 5vw, 2.5rem)',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -61,6 +80,19 @@ export const HomePage = () => {
     textAlign: 'center',
   };
 
+  const retryButtonStyle = {
+    marginTop: '1rem',
+    padding: '0.75rem 1.5rem',
+    backgroundColor: '#667eea',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    cursor: 'pointer',
+    fontWeight: '500',
+    transition: 'background-color 0.2s',
+  };
+
   const spinnerStyle = {
     width: '40px',
     height: '40px',
@@ -76,7 +108,7 @@ export const HomePage = () => {
       <div style={containerStyle}>
         <div style={loadingStyle}>
           <div style={spinnerStyle}></div>
-          Chargement...
+          Chargement des semestres...
           <style dangerouslySetInnerHTML={{
             __html: `
               @keyframes spin {
@@ -95,7 +127,26 @@ export const HomePage = () => {
       <div style={containerStyle}>
         <div style={errorStyle}>
           <div style={{fontSize: '3rem', marginBottom: '1rem'}}>⚠️</div>
-          {error}
+          <div>{error}</div>
+          <button 
+            style={retryButtonStyle}
+            onClick={handleRetry}
+            onMouseOver={(e) => e.target.style.backgroundColor = '#5a67d8'}
+            onMouseOut={(e) => e.target.style.backgroundColor = '#667eea'}
+          >
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (semesters.length === 0) {
+    return (
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div style={{fontSize: '3rem', marginBottom: '1rem'}}>📚</div>
+          Aucun semestre disponible
         </div>
       </div>
     );

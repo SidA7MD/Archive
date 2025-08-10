@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { FileCard } from '../components/FileCard';
 
+// Define API base URL
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+
 export const FilesPage = () => {
   const { yearId } = useParams();
   const [files, setFiles] = useState([]);
@@ -16,17 +19,32 @@ export const FilesPage = () => {
   const fetchFiles = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`http://localhost:5000/api/years/${yearId}/files`);
+      setError(null);
+      
+      const apiUrl = `${API_BASE_URL}/api/years/${yearId}/files`;
+      console.log('Fetching files from:', apiUrl);
+      
+      // Use the API_BASE_URL constant instead of hardcoded URL
+      const response = await axios.get(apiUrl);
       
       console.log('Files response:', response.data); // Debug log
       
       setFiles(response.data);
+      console.log('Files loaded:', response.data);
     } catch (err) {
       console.error('Error fetching files:', err);
-      setError(err.response?.data?.error || 'Erreur lors du chargement des fichiers');
+      const errorMessage = err.response?.data?.error || 
+                          err.message || 
+                          'Erreur lors du chargement des fichiers';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Retry function for failed requests
+  const handleRetry = () => {
+    fetchFiles();
   };
 
   // Enhanced container style matching SubjectsPage
@@ -67,6 +85,19 @@ export const FilesPage = () => {
     textAlign: 'center',
   };
 
+  const retryButtonStyle = {
+    marginTop: '1rem',
+    padding: '0.75rem 1.5rem',
+    backgroundColor: '#667eea',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    cursor: 'pointer',
+    fontWeight: '500',
+    transition: 'background-color 0.2s',
+  };
+
   const spinnerStyle = {
     width: '40px',
     height: '40px',
@@ -82,7 +113,7 @@ export const FilesPage = () => {
       <div style={containerStyle}>
         <div style={loadingStyle}>
           <div style={spinnerStyle}></div>
-          Chargement...
+          Chargement des fichiers...
           <style dangerouslySetInnerHTML={{
             __html: `
               @keyframes spin {
@@ -101,7 +132,26 @@ export const FilesPage = () => {
       <div style={containerStyle}>
         <div style={errorStyle}>
           <div style={{fontSize: '3rem', marginBottom: '1rem'}}>⚠️</div>
-          {error}
+          <div>{error}</div>
+          <button 
+            style={retryButtonStyle}
+            onClick={handleRetry}
+            onMouseOver={(e) => e.target.style.backgroundColor = '#5a67d8'}
+            onMouseOut={(e) => e.target.style.backgroundColor = '#667eea'}
+          >
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (files.length === 0) {
+    return (
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div style={{fontSize: '3rem', marginBottom: '1rem'}}>📄</div>
+          Aucun fichier disponible pour cette année
         </div>
       </div>
     );

@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import styles from './AdminPage.module.css';
 
+// Define API base URL
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+
 export const AdminPage = () => {
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -84,10 +87,17 @@ export const AdminPage = () => {
     uploadData.append('pdf', formData.pdf);
 
     try {
-      const response = await fetch('http://localhost:5000/api/upload', {
+      // Use API_BASE_URL instead of hardcoded URL
+      const apiUrl = `${API_BASE_URL}/api/upload`;
+      console.log('Uploading to:', apiUrl);
+      
+      const response = await fetch(apiUrl, {
         method: 'POST',
         body: uploadData
       });
+      
+      const responseData = await response.json();
+      console.log('Upload response:', responseData);
       
       if (response.ok) {
         setMessage('Fichier uploadé avec succès!');
@@ -102,9 +112,10 @@ export const AdminPage = () => {
         const fileInput = document.getElementById('pdf-input');
         if (fileInput) fileInput.value = '';
       } else {
-        throw new Error('Upload failed');
+        throw new Error(responseData.error || 'Upload failed');
       }
     } catch (error) {
+      console.error('Upload error:', error);
       setMessage('Erreur lors de l\'upload: ' + error.message);
     } finally {
       setUploading(false);

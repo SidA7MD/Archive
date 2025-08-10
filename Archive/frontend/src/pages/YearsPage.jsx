@@ -3,6 +3,9 @@ import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import { YearCard } from '../components/YearCard';
 
+// Define API base URL
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+
 export const YearsPage = () => {
   const { semesterId, typeId, subjectId } = useParams();
   const [years, setYears] = useState([]);
@@ -16,10 +19,16 @@ export const YearsPage = () => {
 
   const fetchYears = async () => {
     try {
-      const response = await axios.get(
-        `http://localhost:5000/api/semesters/${semesterId}/types/${typeId}/subjects/${subjectId}/years`
-      );
+      setLoading(true);
+      setError(null);
+      
+      const apiUrl = `${API_BASE_URL}/api/semesters/${semesterId}/types/${typeId}/subjects/${subjectId}/years`;
+      console.log('Fetching years from:', apiUrl);
+      
+      // Use the API_BASE_URL constant instead of hardcoded URL
+      const response = await axios.get(apiUrl);
       setYears(response.data);
+      
       if (response.data.length > 0) {
         setBreadcrumbData({
           semester: response.data[0].semester.displayName,
@@ -27,12 +36,22 @@ export const YearsPage = () => {
           subject: response.data[0].subject.name
         });
       }
+      
+      console.log('Years loaded:', response.data);
     } catch (err) {
-      setError('Erreur lors du chargement des années');
-      console.error(err);
+      const errorMessage = err.response?.data?.error || 
+                          err.message || 
+                          'Erreur lors du chargement des années';
+      setError(errorMessage);
+      console.error('Error fetching years:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Retry function for failed requests
+  const handleRetry = () => {
+    fetchYears();
   };
 
   // Enhanced container style matching TypesPage
@@ -73,6 +92,19 @@ export const YearsPage = () => {
     textAlign: 'center',
   };
 
+  const retryButtonStyle = {
+    marginTop: '1rem',
+    padding: '0.75rem 1.5rem',
+    backgroundColor: '#667eea',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    cursor: 'pointer',
+    fontWeight: '500',
+    transition: 'background-color 0.2s',
+  };
+
   const spinnerStyle = {
     width: '40px',
     height: '40px',
@@ -88,7 +120,7 @@ export const YearsPage = () => {
       <div style={containerStyle}>
         <div style={loadingStyle}>
           <div style={spinnerStyle}></div>
-          Chargement...
+          Chargement des années...
           <style dangerouslySetInnerHTML={{
             __html: `
               @keyframes spin {
@@ -107,7 +139,26 @@ export const YearsPage = () => {
       <div style={containerStyle}>
         <div style={errorStyle}>
           <div style={{fontSize: '3rem', marginBottom: '1rem'}}>⚠️</div>
-          {error}
+          <div>{error}</div>
+          <button 
+            style={retryButtonStyle}
+            onClick={handleRetry}
+            onMouseOver={(e) => e.target.style.backgroundColor = '#5a67d8'}
+            onMouseOut={(e) => e.target.style.backgroundColor = '#667eea'}
+          >
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (years.length === 0) {
+    return (
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div style={{fontSize: '3rem', marginBottom: '1rem'}}>📅</div>
+          Aucune année disponible pour cette matière
         </div>
       </div>
     );
