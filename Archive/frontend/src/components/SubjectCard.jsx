@@ -464,7 +464,7 @@ const CardButton = styled.button`
   letter-spacing: 0.025em;
   box-shadow: 
     0 8px 25px rgba(0,0,0,0.06),
-    0 4px 12px ${props => props.color}10,
+    0 4px 12px ${props => `${props.color}10`},
     inset 0 1px 0 rgba(255,255,255,0.9);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -494,7 +494,7 @@ const CardButton = styled.button`
     transform: translateY(-3px) scale(1.02);
     box-shadow: 
       0 12px 35px rgba(0,0,0,0.08),
-      0 6px 20px ${props => props.color}20,
+      0 6px 20px ${props => `${props.color}20`},
       inset 0 1px 0 rgba(255,255,255,1);
     border-color: rgba(255,255,255,1);
   }
