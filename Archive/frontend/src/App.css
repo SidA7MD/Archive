@@ -1,0 +1,23 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+   font-family: "Nunito", sans-serif;
+
+}
+
+
+/* Responsive Design */
+/* @media (max-width: 768px) {
+  .semesterGrid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .pageHeader h1 {
+    font-size: 2rem;
+  }
+}
