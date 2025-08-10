@@ -9,15 +9,3 @@ body {
 
 }
 
-
-/* Responsive Design */
-/* @media (max-width: 768px) {
-  .semesterGrid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-  
-  .pageHeader h1 {
-    font-size: 2rem;
-  }
-}
