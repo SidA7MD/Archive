@@ -54,7 +54,7 @@ export const FilesPage = () => {
     gap: 'clamp(1.5rem, 4vw, 2.2rem)',
     justifyContent: 'center',
     alignItems: 'center',
-    top: 'auto',
+    top: '100px',
     minHeight: 'auto',
     padding: 'clamp(1.5rem, 5vw, 2.5rem)',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
