@@ -273,12 +273,184 @@ app.get('/api/files/:fileId/view', async (req, res) => {
   }
 });
 
+// GET /api/admin/files - List all files with full details for admin
+app.get('/api/admin/files', async (req, res) => {
+  try {
+    const files = await File.find({})
+      .populate(['semester', 'type', 'subject', 'year'])
+      .sort({ uploadedAt: -1 });
+    res.json(files);
+  } catch (error) {
+    console.error('Error fetching admin files:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/files/:fileId - Update file name and metadata
+app.put('/api/files/:fileId', async (req, res) => {
+  try {
+    const { originalName, semester, type, subject, year } = req.body;
+    
+    const file = await File.findById(req.params.fileId);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Find or validate semester
+    let semesterDoc = await Semester.findOne({ name: semester });
+    if (!semesterDoc) {
+      return res.status(400).json({ error: 'Invalid semester' });
+    }
+
+    // Find or create type
+    let typeDoc = await Type.findOne({ name: type, semester: semesterDoc._id });
+    if (!typeDoc) {
+      const typeDisplayNames = {
+        'cours': 'Cours',
+        'tp': 'Travaux Pratiques',
+        'td': 'Travaux Dirigés',
+        'devoirs': 'Devoirs',
+        'compositions': 'Compositions',
+        'ratrapages': 'Rattrapages'
+      };
+      
+      typeDoc = new Type({
+        name: type,
+        displayName: typeDisplayNames[type],
+        semester: semesterDoc._id
+      });
+      await typeDoc.save();
+    }
+
+    // Find or create subject
+    let subjectDoc = await Subject.findOne({
+      name: subject,
+      semester: semesterDoc._id,
+      type: typeDoc._id
+    });
+    if (!subjectDoc) {
+      subjectDoc = new Subject({
+        name: subject,
+        semester: semesterDoc._id,
+        type: typeDoc._id
+      });
+      await subjectDoc.save();
+    }
+
+    // Find or create year
+    let yearDoc = await Year.findOne({
+      year: year,
+      semester: semesterDoc._id,
+      type: typeDoc._id,
+      subject: subjectDoc._id
+    });
+    if (!yearDoc) {
+      yearDoc = new Year({
+        year: year,
+        semester: semesterDoc._id,
+        type: typeDoc._id,
+        subject: subjectDoc._id
+      });
+      await yearDoc.save();
+    }
+
+    // Update file
+    const updatedFile = await File.findByIdAndUpdate(
+      req.params.fileId,
+      {
+        originalName,
+        semester: semesterDoc._id,
+        type: typeDoc._id,
+        subject: subjectDoc._id,
+        year: yearDoc._id,
+        updatedAt: new Date()
+      },
+      { new: true }
+    ).populate(['semester', 'type', 'subject', 'year']);
+
+    res.json({ message: 'File updated successfully', file: updatedFile });
+  } catch (error) {
+    console.error('Error updating file:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/files/:fileId - Delete a file
+app.delete('/api/files/:fileId', async (req, res) => {
+  try {
+    const file = await File.findById(req.params.fileId);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Delete the physical file
+    try {
+      if (fs.existsSync(file.filePath)) {
+        fs.unlinkSync(file.filePath);
+        console.log('Physical file deleted:', file.filePath);
+      }
+    } catch (fsError) {
+      console.warn('Warning: Could not delete physical file:', fsError.message);
+    }
+
+    // Delete the file record from database
+    await File.findByIdAndDelete(req.params.fileId);
+
+    res.json({ message: 'File deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/stats - Get admin statistics
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    const totalFiles = await File.countDocuments();
+    const totalSemesters = await Semester.countDocuments();
+    const totalSubjects = await Subject.countDocuments();
+    const totalSize = await File.aggregate([
+      { $group: { _id: null, totalSize: { $sum: '$fileSize' } } }
+    ]);
+
+    const filesByType = await File.aggregate([
+      {
+        $lookup: {
+          from: 'types',
+          localField: 'type',
+          foreignField: '_id',
+          as: 'typeInfo'
+        }
+      },
+      { $unwind: '$typeInfo' },
+      {
+        $group: {
+          _id: '$typeInfo.displayName',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json({
+      totalFiles,
+      totalSemesters,
+      totalSubjects,
+      totalSize: totalSize[0]?.totalSize || 0,
+      filesByType
+    });
+  } catch (error) {
+    console.error('Error fetching admin stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     message: 'Server is running',
-    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
+    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -308,24 +480,59 @@ async function initializeSemesters() {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
-  await mongoose.connection.close();
-  console.log('MongoDB Atlas connection closed.');
+  try {
+    await mongoose.connection.close();
+    console.log('MongoDB Atlas connection closed.');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
   process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\nReceived SIGTERM, shutting down gracefully...');
+  try {
+    await mongoose.connection.close();
+    console.log('MongoDB Atlas connection closed.');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
+  process.exit(0);
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Unhandled error:', error);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: error.message 
+  });
+});
+
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl 
+  });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 API Base URL: http://localhost:${PORT}`);
   
   // Wait for database connection before initializing
   if (mongoose.connection.readyState === 1) {
     await initializeSemesters();
-    console.log('Default semesters initialized');
+    console.log('✅ Default semesters initialized');
   } else {
     mongoose.connection.once('connected', async () => {
       await initializeSemesters();
-      console.log('Default semesters initialized');
+      console.log('✅ Default semesters initialized');
     });
   }
+  
+  console.log('🎯 Server ready to accept connections');
 });

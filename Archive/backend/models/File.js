@@ -19,8 +19,7 @@ const fileSchema = new mongoose.Schema({
   },
   mimeType: {
     type: String,
-    required: true,
-    default: 'application/pdf'
+    required: true
   },
   semester: {
     type: mongoose.Schema.Types.ObjectId,
@@ -41,7 +40,21 @@ const fileSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Year',
     required: true
+  },
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
-}, { timestamps: true });
+});
+
+// Update the updatedAt field before saving
+fileSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
 
 module.exports = mongoose.model('File', fileSchema);
