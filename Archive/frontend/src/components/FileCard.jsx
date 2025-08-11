@@ -74,11 +74,11 @@ const useBreakpoints = () => {
 const getFileIcon = (fileName, breakpoint) => {
   const extension = fileName.toLowerCase().split('.').pop();
   
-  // Responsive icon sizes - larger on mobile for better visibility
+  // Responsive icon sizes - more compact on mobile
   const iconSizes = {
-    'mobile-small': 42,
-    'mobile': 48,
-    'mobile-large': 52,
+    'mobile-small': 36,
+    'mobile': 40,
+    'mobile-large': 44,
     'tablet': 56,
     'desktop-small': 60,
     'desktop': 72
@@ -171,51 +171,51 @@ export const FileCard = ({ file }) => {
     window.location.href = `https://archive-mi73.onrender.com/api/files/${file._id}/download`;
   };
 
-  // Enhanced responsive dimensions - optimized for mobile
+  // Enhanced responsive dimensions - optimized for mobile with compact design
   const dimensions = {
     'mobile-small': {
-      width: 'calc(100vw - 2rem)',
-      maxWidth: '340px',
-      minWidth: '300px',
-      minHeight: '400px',
-      borderRadius: '24px',
-      headerHeight: '180px',
-      padding: '2rem 1.5rem',
-      gap: '1.6rem',
+      width: 'calc(100vw - 2.5rem)',
+      maxWidth: '320px',
+      minWidth: '280px',
+      minHeight: '360px',
+      borderRadius: '20px',
+      headerHeight: '150px',
+      padding: '1.6rem 1.3rem',
+      gap: '1.3rem',
       fontSize: {
-        title: '1.4rem',
-        size: '1.1rem',
-        button: '1.05rem'
+        title: '1.25rem',
+        size: '1rem',
+        button: '0.95rem'
       }
     },
     'mobile': {
-      width: 'calc(100vw - 2rem)',
-      maxWidth: '380px',
-      minWidth: '320px',
-      minHeight: '420px',
-      borderRadius: '26px',
-      headerHeight: '190px',
-      padding: '2.2rem 1.75rem',
-      gap: '1.7rem',
+      width: 'calc(100vw - 2.5rem)',
+      maxWidth: '350px',
+      minWidth: '300px',
+      minHeight: '380px',
+      borderRadius: '22px',
+      headerHeight: '160px',
+      padding: '1.8rem 1.5rem',
+      gap: '1.4rem',
       fontSize: {
-        title: '1.45rem',
-        size: '1.15rem',
-        button: '1.1rem'
+        title: '1.3rem',
+        size: '1.05rem',
+        button: '1rem'
       }
     },
     'mobile-large': {
-      width: 'calc(100vw - 2.5rem)',
-      maxWidth: '420px',
-      minWidth: '340px',
-      minHeight: '440px',
-      borderRadius: '28px',
-      headerHeight: '200px',
-      padding: '2.4rem 2rem',
-      gap: '1.8rem',
+      width: 'calc(100vw - 3rem)',
+      maxWidth: '380px',
+      minWidth: '320px',
+      minHeight: '400px',
+      borderRadius: '24px',
+      headerHeight: '170px',
+      padding: '2rem 1.7rem',
+      gap: '1.5rem',
       fontSize: {
-        title: '1.5rem',
-        size: '1.2rem',
-        button: '1.15rem'
+        title: '1.35rem',
+        size: '1.1rem',
+        button: '1.05rem'
       }
     },
     'tablet': {
@@ -446,9 +446,9 @@ export const FileCard = ({ file }) => {
     fontSize: currentDimensions.fontSize.size,
     color: '#718096',
     fontWeight: '600',
-    background: `linear-gradient(135deg, ${theme.color}15, ${theme.color}08)`,
-    padding: isMobile ? '1.2rem 1.5rem' : isTablet ? '1rem 1.3rem' : '1.1rem 1.5rem',
-    borderRadius: isMobile ? '20px' : isTablet ? '16px' : '18px',
+    background: `linear-gradient(135deg, ${theme.color}12, ${theme.color}08)`,
+    padding: isMobile ? '1rem 1.2rem' : isTablet ? '1rem 1.3rem' : '1.1rem 1.5rem',
+    borderRadius: isMobile ? '16px' : isTablet ? '16px' : '18px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -474,11 +474,11 @@ export const FileCard = ({ file }) => {
 
   const baseButtonStyle = {
     padding: (() => {
-      if (isMobile) return '1.4rem 2.2rem';
+      if (isMobile) return '1.1rem 1.8rem';
       if (isTablet) return '1.2rem 1.8rem';
       return '1.3rem 2rem';
     })(),
-    borderRadius: isMobile ? '20px' : '18px',
+    borderRadius: isMobile ? '18px' : '18px',
     fontSize: currentDimensions.fontSize.button,
     fontWeight: '700',
     cursor: 'pointer',
@@ -486,22 +486,22 @@ export const FileCard = ({ file }) => {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: isMobile ? '1rem' : '0.75rem',
+    gap: isMobile ? '0.7rem' : '0.75rem',
     outline: 'none',
     position: 'relative',
     overflow: 'hidden',
     letterSpacing: '0.02em',
     border: 'none',
-    minHeight: isMobile ? '60px' : '52px',
+    minHeight: isMobile ? '50px' : '52px',
     WebkitTapHighlightColor: 'transparent',
     touchAction: 'manipulation',
     userSelect: 'none',
     fontFamily: 'inherit',
     // Enhanced mobile button presence
     ...(isMobile && {
-      boxShadow: `0 4px 12px rgba(0, 0, 0, 0.1)`,
-      fontWeight: '800',
-      borderRadius: '22px',
+      boxShadow: `0 3px 10px rgba(0, 0, 0, 0.08)`,
+      fontWeight: '700',
+      borderRadius: '18px',
     }),
   };
 
@@ -659,7 +659,7 @@ export const FileCard = ({ file }) => {
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
             >
-              <Eye size={isMobile ? 18 : 20} />
+              <Eye size={isMobile ? 16 : 20} />
               Visualiser
             </button>
             
@@ -671,7 +671,7 @@ export const FileCard = ({ file }) => {
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
             >
-              <Download size={isMobile ? 18 : 20} />
+              <Download size={isMobile ? 16 : 20} />
               Télécharger
             </button>
           </div>
