@@ -53,12 +53,10 @@ mongoose.connection.on('connected', () => {
 
 mongoose.connection.on('error', (err) => {
   console.error('❌ Mongoose connection error:', err.message);
-  // Don't try to reconnect on error to prevent loops
 });
 
 mongoose.connection.on('disconnected', () => {
   console.log('⚠️  Mongoose disconnected from MongoDB Atlas');
-  // Remove automatic reconnection attempt to prevent loops
 });
 
 // Models
@@ -93,6 +91,34 @@ const upload = multer({
     }
   }
 });
+
+// Add middleware to handle CORS for mobile apps
+app.use('/api/files', (req, res, next) => {
+  // Allow mobile apps to access file endpoints
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Range, Accept-Ranges, User-Agent');
+  res.header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Disposition');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
+
+// Utility function to detect mobile browsers
+const isMobileDevice = (userAgent) => {
+  return /Mobile|Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(userAgent || '');
+};
+
+const isIOSDevice = (userAgent) => {
+  return /iPhone|iPad|iPod/i.test(userAgent || '');
+};
+
+const isSafari = (userAgent) => {
+  return /Safari/i.test(userAgent || '') && !/Chrome/i.test(userAgent || '');
+};
 
 // Routes with improved error handling
 
@@ -312,7 +338,7 @@ app.post('/api/upload', upload.single('pdf'), async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/download - Download a file
+// GET /api/files/:fileId/download - Download a file (mobile-optimized)
 app.get('/api/files/:fileId/download', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -327,7 +353,47 @@ app.get('/api/files/:fileId/download', async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    res.download(file.filePath, file.originalName);
+    // Check if file exists on disk
+    if (!fs.existsSync(file.filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    // Detect mobile browsers
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobile = isMobileDevice(userAgent);
+    
+    // Get file stats for Content-Length
+    const stat = fs.statSync(file.filePath);
+    
+    // Set download headers
+    res.set({
+      'Content-Type': file.mimeType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-cache',
+      'Accept-Ranges': 'bytes'
+    });
+
+    // For mobile devices, add additional headers to ensure proper download
+    if (isMobile) {
+      res.set({
+        'X-Suggested-Filename': file.originalName,
+        'Access-Control-Expose-Headers': 'Content-Disposition, X-Suggested-Filename'
+      });
+    }
+
+    // Use res.download for better mobile compatibility
+    res.download(file.filePath, file.originalName, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ 
+            error: 'Failed to download file',
+            message: err.message 
+          });
+        }
+      }
+    });
   } catch (error) {
     console.error('Error downloading file:', error);
     res.status(500).json({ 
@@ -337,7 +403,7 @@ app.get('/api/files/:fileId/download', async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - View a file
+// GET /api/files/:fileId/view - View a file (mobile-optimized)
 app.get('/api/files/:fileId/view', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -352,11 +418,158 @@ app.get('/api/files/:fileId/view', async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    // Check if file exists on disk
+    if (!fs.existsSync(file.filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    // Detect mobile browsers
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobile = isMobileDevice(userAgent);
+    const isIOS = isIOSDevice(userAgent);
+    const isSafariBrowser = isSafari(userAgent);
+    
+    // Set appropriate headers for mobile devices
+    if (file.mimeType === 'application/pdf') {
+      if (isMobile) {
+        // For mobile devices, especially iOS, set headers to force download or proper handling
+        res.set({
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+          // iOS Safari specific headers
+          'X-Content-Type-Options': 'nosniff',
+          // Force Safari to handle PDF properly
+          'Accept-Ranges': 'bytes'
+        });
+        
+        if (isIOS && isSafariBrowser) {
+          // For iOS Safari, sometimes setting as attachment works better
+          res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+        }
+      } else {
+        // Desktop browsers - inline display
+        res.set({
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
+        });
+      }
+    } else {
+      // Non-PDF files
+      res.set({
+        'Content-Type': file.mimeType,
+        'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
+      });
+    }
+
+    // Send the file
     res.sendFile(path.resolve(file.filePath));
   } catch (error) {
     console.error('Error viewing file:', error);
     res.status(500).json({ 
       error: 'Failed to view file',
+      message: error.message 
+    });
+  }
+});
+
+// GET /api/files/:fileId/stream - Stream a file for mobile devices with range support
+app.get('/api/files/:fileId/stream', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ 
+        error: 'Database not connected',
+        status: 'Service Unavailable' 
+      });
+    }
+
+    const file = await File.findById(req.params.fileId);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Check if file exists on disk
+    if (!fs.existsSync(file.filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    const stat = fs.statSync(file.filePath);
+    const range = req.headers.range;
+
+    if (range) {
+      // Handle range requests for mobile browsers
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+      const chunksize = (end - start) + 1;
+      
+      const fileStream = fs.createReadStream(file.filePath, { start, end });
+      
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': file.mimeType || 'application/pdf',
+        'Cache-Control': 'no-cache'
+      });
+      
+      fileStream.pipe(res);
+    } else {
+      // No range request - send full file
+      res.writeHead(200, {
+        'Content-Length': stat.size,
+        'Content-Type': file.mimeType || 'application/pdf',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache'
+      });
+      
+      fs.createReadStream(file.filePath).pipe(res);
+    }
+  } catch (error) {
+    console.error('Error streaming file:', error);
+    res.status(500).json({ 
+      error: 'Failed to stream file',
+      message: error.message 
+    });
+  }
+});
+
+// GET /api/files/:fileId/info - Get file information
+app.get('/api/files/:fileId/info', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ 
+        error: 'Database not connected',
+        status: 'Service Unavailable' 
+      });
+    }
+
+    const file = await File.findById(req.params.fileId)
+      .populate(['semester', 'type', 'subject', 'year'])
+      .lean();
+      
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Check if file exists on disk
+    const fileExists = fs.existsSync(file.filePath);
+    
+    const fileInfo = {
+      ...file,
+      exists: fileExists,
+      downloadUrl: `/api/files/${file._id}/download`,
+      viewUrl: `/api/files/${file._id}/view`,
+      streamUrl: `/api/files/${file._id}/stream`
+    };
+
+    res.json(fileInfo);
+  } catch (error) {
+    console.error('Error fetching file info:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch file info',
       message: error.message 
     });
   }
@@ -376,7 +589,9 @@ app.get('/api/health', (req, res) => {
     status: dbStatus === 1 ? 'OK' : 'DEGRADED', 
     message: 'Server is running',
     database: dbStatusText[dbStatus] || 'Unknown',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    userAgent: req.headers['user-agent'] || 'Unknown',
+    isMobile: isMobileDevice(req.headers['user-agent'])
   });
 });
 
@@ -459,6 +674,7 @@ const startServer = async () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+      console.log(`📱 Mobile-optimized PDF handling enabled`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);

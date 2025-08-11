@@ -1,5 +1,5 @@
-import React from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, ExternalLink, Smartphone } from 'lucide-react';
 
 // Color schemes for different file types/states
 const fileThemes = [
@@ -47,11 +47,20 @@ const fileThemes = [
   }
 ];
 
+// Device detection utilities
+const getDeviceInfo = () => {
+  const userAgent = navigator.userAgent.toLowerCase();
+  const isIOS = /iphone|ipad|ipod/.test(userAgent);
+  const isAndroid = /android/.test(userAgent);
+  const isMobile = /mobile|android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768;
+  const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent);
+  
+  return { isIOS, isAndroid, isMobile, isSafari };
+};
+
 // Get meaningful icon based on file extension
 const getFileIcon = (fileName) => {
   const extension = fileName.toLowerCase().split('.').pop();
-  
-  // Responsive icon size - smaller on mobile
   const isMobile = window.innerWidth < 768;
   const iconSize = isMobile ? 48 : 72;
   const iconProps = { size: iconSize, strokeWidth: 1.5 };
@@ -110,17 +119,207 @@ const getFileTheme = (fileName) => {
   for (let i = 0; i < fileName.length; i++) {
     const char = fileName.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-export const FileCard = ({ file }) => {
+// Mobile PDF Viewer Component
+const MobilePDFViewer = ({ file, isOpen, onClose }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const overlayStyle = {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    zIndex: 10000,
+    display: isOpen ? 'flex' : 'none',
+    flexDirection: 'column',
+  };
+
+  const headerStyle = {
+    padding: '1rem',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    color: 'white',
+  };
+
+  const contentStyle = {
+    flex: 1,
+    padding: '1rem',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'white',
+    textAlign: 'center',
+  };
+
+  const buttonStyle = {
+    padding: '1rem 2rem',
+    margin: '0.5rem',
+    borderRadius: '8px',
+    border: 'none',
+    backgroundColor: '#007AFF',
+    color: 'white',
+    fontSize: '1rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+  };
+
+  const handleViewPDF = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // For mobile devices, especially iOS, we need to handle PDFs differently
+      const { isIOS, isAndroid, isSafari } = getDeviceInfo();
+      const fileUrl = `${window.location.origin.replace(':3000', ':5000')}/api/files/${file._id}/view`;
+      
+      if (isIOS || isSafari) {
+        // iOS Safari: Force download or open in Safari
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error('Failed to load PDF');
+        
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        
+        // Create a temporary link to open the PDF
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+      } else {
+        // Android and other browsers
+        window.open(fileUrl, '_blank', 'noopener,noreferrer');
+      }
+      
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = () => {
+    const downloadUrl = `${window.location.origin.replace(':3000', ':5000')}/api/files/${file._id}/download`;
+    window.location.href = downloadUrl;
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div style={overlayStyle}>
+      <div style={headerStyle}>
+        <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{file.originalName}</h3>
+        <button 
+          onClick={onClose}
+          style={{ 
+            background: 'none', 
+            border: 'none', 
+            color: 'white', 
+            fontSize: '1.5rem',
+            cursor: 'pointer',
+            padding: '0.5rem'
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      
+      <div style={contentStyle}>
+        <div style={{ marginBottom: '2rem' }}>
+          <Smartphone size={64} color="white" style={{ marginBottom: '1rem' }} />
+          <h4 style={{ marginBottom: '1rem' }}>Choose how to view this PDF</h4>
+          <p style={{ opacity: 0.8, marginBottom: '2rem', maxWidth: '300px' }}>
+            Mobile browsers handle PDFs differently. Choose the best option for your device.
+          </p>
+        </div>
+
+        {loading && (
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ 
+              border: '3px solid rgba(255,255,255,0.3)',
+              borderTop: '3px solid white',
+              borderRadius: '50%',
+              width: '32px',
+              height: '32px',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto'
+            }}></div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ 
+            color: '#ff4757', 
+            marginBottom: '1rem',
+            padding: '1rem',
+            backgroundColor: 'rgba(255, 71, 87, 0.1)',
+            borderRadius: '8px'
+          }}>
+            Error: {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '300px' }}>
+          <button 
+            style={buttonStyle}
+            onClick={handleViewPDF}
+            disabled={loading}
+          >
+            <ExternalLink size={20} />
+            Open in Browser
+          </button>
+          
+          <button 
+            style={{ ...buttonStyle, backgroundColor: '#34c759' }}
+            onClick={handleDownload}
+            disabled={loading}
+          >
+            <Download size={20} />
+            Download PDF
+          </button>
+        </div>
+        
+        <p style={{ 
+          opacity: 0.6, 
+          fontSize: '0.9rem', 
+          marginTop: '2rem',
+          maxWidth: '320px',
+          lineHeight: '1.4'
+        }}>
+          💡 Tip: If the PDF doesn't open properly, try downloading it and opening with your device's PDF reader app.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
   const theme = getFileTheme(file.originalName || 'default');
   const fileIcon = getFileIcon(file.originalName || 'file.txt');
-  const [isDesktop, setIsDesktop] = React.useState(window.innerWidth >= 768);
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
+  const [showMobileViewer, setShowMobileViewer] = useState(false);
+  const deviceInfo = getDeviceInfo();
 
-  React.useEffect(() => {
+  useEffect(() => {
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
     };
@@ -137,15 +336,39 @@ export const FileCard = ({ file }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const isPDF = (fileName) => {
+    return fileName.toLowerCase().endsWith('.pdf');
+  };
+
   const handleView = () => {
-    window.open(`http://localhost:5000/api/files/${file._id}/view`, '_blank');
+    if (deviceInfo.isMobile && isPDF(file.originalName)) {
+      // On mobile, show our custom viewer for PDFs
+      setShowMobileViewer(true);
+    } else {
+      // Desktop behavior - open in new tab
+      const fileUrl = `${apiBaseUrl}/api/files/${file._id}/view`;
+      window.open(fileUrl, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const handleDownload = () => {
-    window.location.href = `http://localhost:5000/api/files/${file._id}/download`;
+    const downloadUrl = `${apiBaseUrl}/api/files/${file._id}/download`;
+    
+    if (deviceInfo.isMobile) {
+      // On mobile, direct navigation works better
+      window.location.href = downloadUrl;
+    } else {
+      // Desktop - create invisible link for download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = file.originalName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
-  // Mobile-first styling with proper responsive design
+  // Component styles (keeping your existing styles)
   const containerStyle = {
     width: '100%',
     maxWidth: isDesktop ? '1200px' : '350px',
@@ -179,59 +402,6 @@ export const FileCard = ({ file }) => {
     overflow: 'hidden',
     borderTopRightRadius: isDesktop ? '60% 30%' : '0',
     borderBottomRightRadius: isDesktop ? '60% 30%' : '0',
-  };
-
-  // Animated decorative elements - smaller on mobile
-  const decorativeElements = (
-    <>
-      <div style={{
-        position: 'absolute',
-        top: isDesktop ? '-30px' : '-20px',
-        right: isDesktop ? '-30px' : '-20px',
-        width: isDesktop ? '120px' : '80px',
-        height: isDesktop ? '120px' : '80px',
-        background: 'rgba(255, 255, 255, 0.15)',
-        borderRadius: '50%',
-        animation: 'float1 7s ease-in-out infinite',
-      }}></div>
-      <div style={{
-        position: 'absolute',
-        bottom: isDesktop ? '-25px' : '-15px',
-        left: isDesktop ? '-25px' : '-15px',
-        width: isDesktop ? '80px' : '60px',
-        height: isDesktop ? '80px' : '60px',
-        background: 'rgba(255, 255, 255, 0.12)',
-        borderRadius: '50%',
-        animation: 'float2 9s ease-in-out infinite',
-      }}></div>
-      <div style={{
-        position: 'absolute',
-        top: '25%',
-        left: '20%',
-        width: isDesktop ? '8px' : '6px',
-        height: isDesktop ? '8px' : '6px',
-        background: 'rgba(255, 255, 255, 0.6)',
-        borderRadius: '50%',
-        animation: 'twinkle 5s ease-in-out infinite',
-      }}></div>
-      <div style={{
-        position: 'absolute',
-        bottom: '35%',
-        right: '25%',
-        width: isDesktop ? '6px' : '4px',
-        height: isDesktop ? '6px' : '4px',
-        background: 'rgba(255, 255, 255, 0.8)',
-        borderRadius: '50%',
-        animation: 'twinkle 4s ease-in-out infinite 2s',
-      }}></div>
-    </>
-  );
-
-  const fileIconStyle = {
-    filter: 'drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3))',
-    animation: 'iconGlow 3s ease-in-out infinite alternate',
-    zIndex: 2,
-    marginBottom: '0.5rem',
   };
 
   const contentStyle = {
@@ -291,7 +461,7 @@ export const FileCard = ({ file }) => {
     overflow: 'hidden',
     letterSpacing: '0.01em',
     border: 'none',
-    minHeight: '48px', // Touch-friendly
+    minHeight: '48px',
     flex: isDesktop ? 1 : 'none',
   };
 
@@ -309,48 +479,28 @@ export const FileCard = ({ file }) => {
     boxShadow: `0 4px 15px ${theme.shadow}`,
   };
 
-  const handleContainerHover = (e, isHovering) => {
-    // Only apply hover effects on desktop
-    if (isDesktop) {
-      if (isHovering) {
-        e.currentTarget.style.transform = 'translateY(-8px) scale(1.02)';
-        e.currentTarget.style.boxShadow = `0 20px 60px rgba(0, 0, 0, 0.12), 0 8px 30px ${theme.shadow}`;
-        e.currentTarget.style.borderColor = `${theme.color}25`;
-      } else {
-        e.currentTarget.style.transform = 'translateY(0) scale(1)';
-        e.currentTarget.style.boxShadow = '0 8px 25px rgba(0, 0, 0, 0.1), 0 3px 12px rgba(0, 0, 0, 0.05)';
-        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.9)';
-      }
-    }
-  };
+  // Add mobile indicator for PDFs
+  const mobileIndicatorStyle = deviceInfo.isMobile && isPDF(file.originalName) ? {
+    position: 'absolute',
+    top: '10px',
+    right: '10px',
+    background: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: '20px',
+    padding: '0.25rem 0.5rem',
+    fontSize: '0.7rem',
+    color: theme.color,
+    fontWeight: '600',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.25rem',
+  } : { display: 'none' };
 
-  const handleButtonHover = (e, isHovering, buttonType) => {
-    if (isHovering) {
-      if (buttonType === 'view') {
-        e.currentTarget.style.background = `linear-gradient(135deg, ${theme.color}25, ${theme.color}20, ${theme.color}15)`;
-        e.currentTarget.style.borderColor = `${theme.color}40`;
-        e.currentTarget.style.transform = 'translateY(-2px)';
-        e.currentTarget.style.boxShadow = `0 6px 20px ${theme.color}30`;
-      } else {
-        e.currentTarget.style.transform = 'translateY(-2px)';
-        e.currentTarget.style.boxShadow = `0 8px 25px ${theme.shadow}`;
-        e.currentTarget.style.filter = 'brightness(1.1)';
-      }
-    } else {
-      if (buttonType === 'view') {
-        e.currentTarget.style.background = `linear-gradient(135deg, ${theme.color}15, ${theme.color}10, ${theme.color}08)`;
-        e.currentTarget.style.borderColor = `${theme.color}25`;
-        e.currentTarget.style.boxShadow = 'none';
-      } else {
-        e.currentTarget.style.boxShadow = `0 4px 15px ${theme.shadow}`;
-        e.currentTarget.style.filter = 'brightness(1)';
-      }
-      e.currentTarget.style.transform = 'translateY(0)';
-    }
-  };
-
-  // Keyframes in a style tag for animations
+  // Animation styles
   const animationStyles = `
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
     @keyframes float1 {
       0%, 100% { transform: translateY(0px) rotate(0deg); }
       50% { transform: translateY(-12px) rotate(6deg); }
@@ -373,14 +523,19 @@ export const FileCard = ({ file }) => {
     <>
       <style dangerouslySetInnerHTML={{ __html: animationStyles }} />
       
-      <div 
-        style={containerStyle}
-        onMouseEnter={(e) => handleContainerHover(e, true)}
-        onMouseLeave={(e) => handleContainerHover(e, false)}
-      >
+      <div style={containerStyle}>
         <div style={headerStyle}>
-          {decorativeElements}
-          <div style={fileIconStyle}>
+          <div style={mobileIndicatorStyle}>
+            <Smartphone size={12} />
+            Mobile
+          </div>
+          
+          <div style={{
+            filter: 'drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3))',
+            animation: 'iconGlow 3s ease-in-out infinite alternate',
+            zIndex: 2,
+            marginBottom: '0.5rem',
+          }}>
             {fileIcon}
           </div>
         </div>
@@ -399,18 +554,14 @@ export const FileCard = ({ file }) => {
             <button
               style={viewButtonStyle}
               onClick={handleView}
-              onMouseEnter={(e) => handleButtonHover(e, true, 'view')}
-              onMouseLeave={(e) => handleButtonHover(e, false, 'view')}
             >
               <Eye size={isDesktop ? 20 : 18} />
-              Visualiser
+              {deviceInfo.isMobile && isPDF(file.originalName) ? 'Ouvrir' : 'Visualiser'}
             </button>
             
             <button
               style={downloadButtonStyle}
               onClick={handleDownload}
-              onMouseEnter={(e) => handleButtonHover(e, true, 'download')}
-              onMouseLeave={(e) => handleButtonHover(e, false, 'download')}
             >
               <Download size={isDesktop ? 20 : 18} />
               Télécharger
@@ -418,38 +569,34 @@ export const FileCard = ({ file }) => {
           </div>
         </div>
       </div>
+
+      <MobilePDFViewer 
+        file={file}
+        isOpen={showMobileViewer}
+        onClose={() => setShowMobileViewer(false)}
+      />
     </>
   );
 };
 
-// Example usage component showcasing different file types
+// Demo component
 const PDFAppDemo = () => {
   const sampleFiles = [
     {
       _id: '1',
       originalName: 'Annual_Report_2024.pdf',
-      fileSize: 2048576, // 2 MB
+      fileSize: 2048576,
     },
     {
       _id: '2',
       originalName: 'presentation_slides.pptx',
-      fileSize: 5242880, // 5 MB
-    },
-    {
-      _id: '3',
-      originalName: 'vacation_photos.zip',
-      fileSize: 15728640, // 15 MB
-    },
-    {
-      _id: '4',
-      originalName: 'background_music.mp3',
-      fileSize: 4194304, // 4 MB
+      fileSize: 5242880,
     },
   ];
 
-  const [isDesktop, setIsDesktop] = React.useState(window.innerWidth >= 768);
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
     };
