@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, ExternalLink, Smartphone, AlertCircle } from 'lucide-react';
+import React from 'react';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet } from 'lucide-react';
 
 // Color schemes for different file types/states
 const fileThemes = [
@@ -47,21 +47,11 @@ const fileThemes = [
   }
 ];
 
-// Device detection utilities
-const getDeviceInfo = () => {
-  const userAgent = navigator.userAgent.toLowerCase();
-  const isIOS = /iphone|ipad|ipod/.test(userAgent);
-  const isAndroid = /android/.test(userAgent);
-  const isMobile = /mobile|android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768;
-  const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent);
-  const isChrome = /chrome/.test(userAgent) && !/edg/.test(userAgent);
-  
-  return { isIOS, isAndroid, isMobile, isSafari, isChrome };
-};
-
 // Get meaningful icon based on file extension
 const getFileIcon = (fileName) => {
   const extension = fileName.toLowerCase().split('.').pop();
+  
+  // Responsive icon size - smaller on mobile
   const isMobile = window.innerWidth < 768;
   const iconSize = isMobile ? 48 : 72;
   const iconProps = { size: iconSize, strokeWidth: 1.5 };
@@ -120,371 +110,17 @@ const getFileTheme = (fileName) => {
   for (let i = 0; i < fileName.length; i++) {
     const char = fileName.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+    hash = hash & hash; // Convert to 32bit integer
   }
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// Mobile PDF Viewer Component
-const MobilePDFViewer = ({ file, isOpen, onClose, apiBaseUrl }) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [showTips, setShowTips] = useState(false);
-  const deviceInfo = getDeviceInfo();
-
-  const overlayStyle = {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)',
-    zIndex: 10000,
-    display: isOpen ? 'flex' : 'none',
-    flexDirection: 'column',
-  };
-
-  const headerStyle = {
-    padding: '1rem',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    color: 'white',
-  };
-
-  const contentStyle = {
-    flex: 1,
-    padding: '1rem',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: 'white',
-    textAlign: 'center',
-  };
-
-  const buttonStyle = {
-    padding: '1rem 2rem',
-    margin: '0.5rem',
-    borderRadius: '12px',
-    border: 'none',
-    backgroundColor: '#007AFF',
-    color: 'white',
-    fontSize: '1rem',
-    fontWeight: '600',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    transition: 'all 0.3s ease',
-    boxShadow: '0 4px 12px rgba(0, 122, 255, 0.3)',
-  };
-
-  // Enhanced PDF opening logic
-  const handleViewPDF = async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const baseUrl = apiBaseUrl || (window.location.origin.includes(':3000') 
-        ? window.location.origin.replace(':3000', ':5000') 
-        : window.location.origin);
-      
-      const fileUrl = `${baseUrl}/api/files/${file._id}/view`;
-      
-      if (deviceInfo.isIOS) {
-        // iOS - Multiple approaches for better compatibility
-        try {
-          // Method 1: Try direct navigation first (works best on iOS)
-          window.location.href = fileUrl;
-          
-          // Fallback after a short delay
-          setTimeout(() => {
-            if (document.hidden || document.visibilityState === 'hidden') {
-              // PDF likely opened successfully
-              onClose();
-            } else {
-              // Try alternative method
-              const link = document.createElement('a');
-              link.href = fileUrl;
-              link.target = '_blank';
-              link.rel = 'noopener noreferrer';
-              link.style.display = 'none';
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-            }
-          }, 1000);
-          
-        } catch (err) {
-          console.warn('Direct navigation failed, trying blob approach');
-          
-          // Fallback: Blob approach for iOS
-          const response = await fetch(fileUrl);
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          
-          const link = document.createElement('a');
-          link.href = url;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          
-          setTimeout(() => {
-            URL.revokeObjectURL(url);
-          }, 1000);
-        }
-        
-      } else if (deviceInfo.isAndroid) {
-        // Android - Try window.open with fallbacks
-        const newWindow = window.open(fileUrl, '_blank', 'noopener,noreferrer');
-        
-        if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-          // Popup blocked or failed, try direct navigation
-          window.location.href = fileUrl;
-        } else {
-          // Successfully opened in new tab
-          setTimeout(() => {
-            if (newWindow.closed) {
-              onClose();
-            }
-          }, 1000);
-        }
-        
-      } else {
-        // Other mobile browsers
-        const link = document.createElement('a');
-        link.href = fileUrl;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.click();
-      }
-      
-      // Close modal after a short delay
-      setTimeout(() => {
-        onClose();
-      }, 1500);
-      
-    } catch (err) {
-      console.error('PDF viewing error:', err);
-      setError(`Failed to open PDF: ${err.message}. Try downloading instead.`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDownload = async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const baseUrl = apiBaseUrl || (window.location.origin.includes(':3000') 
-        ? window.location.origin.replace(':3000', ':5000') 
-        : window.location.origin);
-        
-      const downloadUrl = `${baseUrl}/api/files/${file._id}/download`;
-      
-      if (deviceInfo.isIOS || deviceInfo.isSafari) {
-        // iOS Safari - Direct navigation works best
-        window.location.href = downloadUrl;
-      } else {
-        // Android and other browsers - Try to trigger download
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = file.originalName;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
-      
-      onClose();
-    } catch (err) {
-      setError(`Download failed: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Enhanced button with device-specific text
-  const getViewButtonText = () => {
-    if (deviceInfo.isIOS) return 'Open in Safari';
-    if (deviceInfo.isAndroid) return 'Open PDF';
-    return 'View PDF';
-  };
-
-  const getDeviceSpecificTip = () => {
-    if (deviceInfo.isIOS) {
-      return "On iOS, PDFs open in Safari or your default PDF app. If nothing happens, try the download option.";
-    }
-    if (deviceInfo.isAndroid) {
-      return "On Android, choose your preferred PDF app when prompted. Download if the PDF doesn't open properly.";
-    }
-    return "If the PDF doesn't open, try downloading it to view with your device's PDF reader.";
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div style={overlayStyle}>
-      <div style={headerStyle}>
-        <h3 style={{ margin: 0, fontSize: '1.2rem', flex: 1, textAlign: 'left' }}>
-          {file.originalName}
-        </h3>
-        <button 
-          onClick={onClose}
-          style={{ 
-            background: 'none', 
-            border: 'none', 
-            color: 'white', 
-            fontSize: '1.5rem',
-            cursor: 'pointer',
-            padding: '0.5rem',
-            borderRadius: '50%',
-            width: '40px',
-            height: '40px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-        >
-          ✕
-        </button>
-      </div>
-      
-      <div style={contentStyle}>
-        <div style={{ marginBottom: '2rem' }}>
-          <div style={{ 
-            background: 'linear-gradient(135deg, #007AFF, #0056CC)',
-            borderRadius: '50%',
-            padding: '1rem',
-            marginBottom: '1rem',
-            display: 'inline-block'
-          }}>
-            <FileText size={48} color="white" />
-          </div>
-          <h4 style={{ marginBottom: '0.5rem', fontSize: '1.4rem' }}>PDF Viewer</h4>
-          <p style={{ opacity: 0.8, marginBottom: '1rem', maxWidth: '320px', fontSize: '0.9rem' }}>
-            {deviceInfo.isIOS ? 'iOS Device Detected' : deviceInfo.isAndroid ? 'Android Device Detected' : 'Mobile Device'}
-          </p>
-        </div>
-
-        {loading && (
-          <div style={{ marginBottom: '1.5rem' }}>
-            <div style={{ 
-              border: '3px solid rgba(255,255,255,0.3)',
-              borderTop: '3px solid white',
-              borderRadius: '50%',
-              width: '32px',
-              height: '32px',
-              animation: 'spin 1s linear infinite',
-              margin: '0 auto 1rem auto'
-            }}></div>
-            <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Opening PDF...</p>
-          </div>
-        )}
-
-        {error && (
-          <div style={{ 
-            color: '#ff4757', 
-            marginBottom: '1.5rem',
-            padding: '1rem',
-            backgroundColor: 'rgba(255, 71, 87, 0.1)',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 71, 87, 0.3)',
-            maxWidth: '320px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '0.5rem'
-          }}>
-            <AlertCircle size={20} style={{ marginTop: '0.1rem', flexShrink: 0 }} />
-            <span style={{ fontSize: '0.9rem' }}>{error}</span>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '300px', gap: '0.75rem' }}>
-          <button 
-            style={{
-              ...buttonStyle,
-              backgroundColor: loading ? '#999' : '#007AFF',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
-            onClick={handleViewPDF}
-            disabled={loading}
-          >
-            <ExternalLink size={20} />
-            {getViewButtonText()}
-          </button>
-          
-          <button 
-            style={{ 
-              ...buttonStyle, 
-              backgroundColor: loading ? '#999' : '#34c759',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
-            onClick={handleDownload}
-            disabled={loading}
-          >
-            <Download size={20} />
-            Download PDF
-          </button>
-        </div>
-        
-        <button
-          onClick={() => setShowTips(!showTips)}
-          style={{
-            background: 'none',
-            border: '1px solid rgba(255,255,255,0.3)',
-            color: 'white',
-            padding: '0.5rem 1rem',
-            borderRadius: '20px',
-            fontSize: '0.85rem',
-            marginTop: '1.5rem',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}
-        >
-          💡 {showTips ? 'Hide' : 'Show'} Tips
-        </button>
-
-        {showTips && (
-          <div style={{ 
-            opacity: 0.8, 
-            fontSize: '0.85rem', 
-            marginTop: '1rem',
-            maxWidth: '320px',
-            lineHeight: '1.5',
-            padding: '1rem',
-            backgroundColor: 'rgba(255,255,255,0.1)',
-            borderRadius: '12px',
-            border: '1px solid rgba(255,255,255,0.2)'
-          }}>
-            <p style={{ margin: '0 0 0.5rem 0', fontWeight: '600' }}>Device-specific tip:</p>
-            <p style={{ margin: 0 }}>{getDeviceSpecificTip()}</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
+export const FileCard = ({ file }) => {
   const theme = getFileTheme(file.originalName || 'default');
   const fileIcon = getFileIcon(file.originalName || 'file.txt');
-  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
-  const [showMobileViewer, setShowMobileViewer] = useState(false);
-  const deviceInfo = getDeviceInfo();
+  const [isDesktop, setIsDesktop] = React.useState(window.innerWidth >= 768);
 
-  useEffect(() => {
+  React.useEffect(() => {
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
     };
@@ -501,39 +137,15 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const isPDF = (fileName) => {
-    return fileName.toLowerCase().endsWith('.pdf');
-  };
-
   const handleView = () => {
-    if (deviceInfo.isMobile && isPDF(file.originalName)) {
-      // On mobile, show our enhanced viewer for PDFs
-      setShowMobileViewer(true);
-    } else {
-      // Desktop behavior - open in new tab
-      const fileUrl = `${apiBaseUrl}/api/files/${file._id}/view`;
-      window.open(fileUrl, '_blank', 'noopener,noreferrer');
-    }
+    window.open(`https://archive-mi73.onrender.com/api/files/${file._id}/view`, '_blank');
   };
 
   const handleDownload = () => {
-    const downloadUrl = `${apiBaseUrl}/api/files/${file._id}/download`;
-    
-    if (deviceInfo.isMobile) {
-      // On mobile, direct navigation works better
-      window.location.href = downloadUrl;
-    } else {
-      // Desktop - create invisible link for download
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = file.originalName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
+    window.location.href = `https://archive-mi73.onrender.com/api/files/${file._id}/download`;
   };
 
-  // Component styles
+  // Mobile-first styling with proper responsive design
   const containerStyle = {
     width: '100%',
     maxWidth: isDesktop ? '1200px' : '350px',
@@ -567,6 +179,59 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     overflow: 'hidden',
     borderTopRightRadius: isDesktop ? '60% 30%' : '0',
     borderBottomRightRadius: isDesktop ? '60% 30%' : '0',
+  };
+
+  // Animated decorative elements - smaller on mobile
+  const decorativeElements = (
+    <>
+      <div style={{
+        position: 'absolute',
+        top: isDesktop ? '-30px' : '-20px',
+        right: isDesktop ? '-30px' : '-20px',
+        width: isDesktop ? '120px' : '80px',
+        height: isDesktop ? '120px' : '80px',
+        background: 'rgba(255, 255, 255, 0.15)',
+        borderRadius: '50%',
+        animation: 'float1 7s ease-in-out infinite',
+      }}></div>
+      <div style={{
+        position: 'absolute',
+        bottom: isDesktop ? '-25px' : '-15px',
+        left: isDesktop ? '-25px' : '-15px',
+        width: isDesktop ? '80px' : '60px',
+        height: isDesktop ? '80px' : '60px',
+        background: 'rgba(255, 255, 255, 0.12)',
+        borderRadius: '50%',
+        animation: 'float2 9s ease-in-out infinite',
+      }}></div>
+      <div style={{
+        position: 'absolute',
+        top: '25%',
+        left: '20%',
+        width: isDesktop ? '8px' : '6px',
+        height: isDesktop ? '8px' : '6px',
+        background: 'rgba(255, 255, 255, 0.6)',
+        borderRadius: '50%',
+        animation: 'twinkle 5s ease-in-out infinite',
+      }}></div>
+      <div style={{
+        position: 'absolute',
+        bottom: '35%',
+        right: '25%',
+        width: isDesktop ? '6px' : '4px',
+        height: isDesktop ? '6px' : '4px',
+        background: 'rgba(255, 255, 255, 0.8)',
+        borderRadius: '50%',
+        animation: 'twinkle 4s ease-in-out infinite 2s',
+      }}></div>
+    </>
+  );
+
+  const fileIconStyle = {
+    filter: 'drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3))',
+    animation: 'iconGlow 3s ease-in-out infinite alternate',
+    zIndex: 2,
+    marginBottom: '0.5rem',
   };
 
   const contentStyle = {
@@ -626,7 +291,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     overflow: 'hidden',
     letterSpacing: '0.01em',
     border: 'none',
-    minHeight: '48px',
+    minHeight: '48px', // Touch-friendly
     flex: isDesktop ? 1 : 'none',
   };
 
@@ -644,28 +309,59 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     boxShadow: `0 4px 15px ${theme.shadow}`,
   };
 
-  // Enhanced mobile indicator for PDFs
-  const mobileIndicatorStyle = deviceInfo.isMobile && isPDF(file.originalName) ? {
-    position: 'absolute',
-    top: '10px',
-    right: '10px',
-    background: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: '20px',
-    padding: '0.25rem 0.5rem',
-    fontSize: '0.7rem',
-    color: theme.color,
-    fontWeight: '600',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.25rem',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-  } : { display: 'none' };
+  const handleContainerHover = (e, isHovering) => {
+    // Only apply hover effects on desktop
+    if (isDesktop) {
+      if (isHovering) {
+        e.currentTarget.style.transform = 'translateY(-8px) scale(1.02)';
+        e.currentTarget.style.boxShadow = `0 20px 60px rgba(0, 0, 0, 0.12), 0 8px 30px ${theme.shadow}`;
+        e.currentTarget.style.borderColor = `${theme.color}25`;
+      } else {
+        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+        e.currentTarget.style.boxShadow = '0 8px 25px rgba(0, 0, 0, 0.1), 0 3px 12px rgba(0, 0, 0, 0.05)';
+        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.9)';
+      }
+    }
+  };
 
-  // Animation styles
+  const handleButtonHover = (e, isHovering, buttonType) => {
+    if (isHovering) {
+      if (buttonType === 'view') {
+        e.currentTarget.style.background = `linear-gradient(135deg, ${theme.color}25, ${theme.color}20, ${theme.color}15)`;
+        e.currentTarget.style.borderColor = `${theme.color}40`;
+        e.currentTarget.style.transform = 'translateY(-2px)';
+        e.currentTarget.style.boxShadow = `0 6px 20px ${theme.color}30`;
+      } else {
+        e.currentTarget.style.transform = 'translateY(-2px)';
+        e.currentTarget.style.boxShadow = `0 8px 25px ${theme.shadow}`;
+        e.currentTarget.style.filter = 'brightness(1.1)';
+      }
+    } else {
+      if (buttonType === 'view') {
+        e.currentTarget.style.background = `linear-gradient(135deg, ${theme.color}15, ${theme.color}10, ${theme.color}08)`;
+        e.currentTarget.style.borderColor = `${theme.color}25`;
+        e.currentTarget.style.boxShadow = 'none';
+      } else {
+        e.currentTarget.style.boxShadow = `0 4px 15px ${theme.shadow}`;
+        e.currentTarget.style.filter = 'brightness(1)';
+      }
+      e.currentTarget.style.transform = 'translateY(0)';
+    }
+  };
+
+  // Keyframes in a style tag for animations
   const animationStyles = `
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
+    @keyframes float1 {
+      0%, 100% { transform: translateY(0px) rotate(0deg); }
+      50% { transform: translateY(-12px) rotate(6deg); }
+    }
+    @keyframes float2 {
+      0%, 100% { transform: translateY(0px) rotate(0deg); }
+      50% { transform: translateY(-10px) rotate(-4deg); }
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: 0.3; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.8); }
     }
     @keyframes iconGlow {
       0% { filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3)); }
@@ -677,19 +373,14 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     <>
       <style dangerouslySetInnerHTML={{ __html: animationStyles }} />
       
-      <div style={containerStyle}>
+      <div 
+        style={containerStyle}
+        onMouseEnter={(e) => handleContainerHover(e, true)}
+        onMouseLeave={(e) => handleContainerHover(e, false)}
+      >
         <div style={headerStyle}>
-          <div style={mobileIndicatorStyle}>
-            <Smartphone size={12} />
-            {deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'Mobile'}
-          </div>
-          
-          <div style={{
-            filter: 'drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3))',
-            animation: 'iconGlow 3s ease-in-out infinite alternate',
-            zIndex: 2,
-            marginBottom: '0.5rem',
-          }}>
+          {decorativeElements}
+          <div style={fileIconStyle}>
             {fileIcon}
           </div>
         </div>
@@ -708,14 +399,18 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
             <button
               style={viewButtonStyle}
               onClick={handleView}
+              onMouseEnter={(e) => handleButtonHover(e, true, 'view')}
+              onMouseLeave={(e) => handleButtonHover(e, false, 'view')}
             >
               <Eye size={isDesktop ? 20 : 18} />
-              {deviceInfo.isMobile && isPDF(file.originalName) ? 'Ouvrir' : 'Visualiser'}
+              Visualiser
             </button>
             
             <button
               style={downloadButtonStyle}
               onClick={handleDownload}
+              onMouseEnter={(e) => handleButtonHover(e, true, 'download')}
+              onMouseLeave={(e) => handleButtonHover(e, false, 'download')}
             >
               <Download size={isDesktop ? 20 : 18} />
               Télécharger
@@ -723,40 +418,38 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
           </div>
         </div>
       </div>
-
-      <MobilePDFViewer 
-        file={file}
-        isOpen={showMobileViewer}
-        onClose={() => setShowMobileViewer(false)}
-        apiBaseUrl={apiBaseUrl}
-      />
     </>
   );
 };
 
-// Demo component
+// Example usage component showcasing different file types
 const PDFAppDemo = () => {
   const sampleFiles = [
     {
       _id: '1',
       originalName: 'Annual_Report_2024.pdf',
-      fileSize: 2048576,
+      fileSize: 2048576, // 2 MB
     },
     {
-      _id: '2', 
+      _id: '2',
       originalName: 'presentation_slides.pptx',
-      fileSize: 5242880,
+      fileSize: 5242880, // 5 MB
     },
     {
       _id: '3',
-      originalName: 'technical_documentation.pdf',
-      fileSize: 1024000,
+      originalName: 'vacation_photos.zip',
+      fileSize: 15728640, // 15 MB
+    },
+    {
+      _id: '4',
+      originalName: 'background_music.mp3',
+      fileSize: 4194304, // 4 MB
     },
   ];
 
-  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
+  const [isDesktop, setIsDesktop] = React.useState(window.innerWidth >= 768);
 
-  useEffect(() => {
+  React.useEffect(() => {
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
     };

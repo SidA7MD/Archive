@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-// MongoDB Atlas connection with proper options
+// MongoDB Atlas connection
 const MONGO_URI = `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
 console.log('Attempting to connect to MongoDB Atlas...');
@@ -21,32 +21,19 @@ console.log('Host:', process.env.MONGO_HOST);
 console.log('Database:', process.env.MONGO_DB_NAME);
 console.log('Username:', process.env.MONGO_USERNAME);
 
-// Improved connection options
-const connectDB = async () => {
-  try {
-    await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 10000, // Timeout after 10s instead of 30s
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      minPoolSize: 1, // Maintain at least 1 socket connection
-      maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-      bufferCommands: false // Disable mongoose buffering
-    });
-    console.log('✅ Connected to MongoDB Atlas successfully');
-    
-    // Initialize semesters after successful connection
-    await initializeSemesters();
-    console.log('✅ Default semesters initialized');
-  } catch (error) {
-    console.error('❌ MongoDB Atlas connection error:', error.message);
-    console.error('Connection string (without password):', MONGO_URI.replace(process.env.MONGO_PASSWORD, '****'));
-    
-    // Exit process on connection failure to prevent infinite loops
-    process.exit(1);
-  }
-};
+mongoose.connect(MONGO_URI)
+.then(() => {
+  console.log('Connected to MongoDB Atlas successfully');
+})
+.catch((error) => {
+  console.error('MongoDB Atlas connection error:', error);
+  console.error('Connection string (without password):', MONGO_URI.replace(process.env.MONGO_PASSWORD, '****'));
+  
+  // Don't exit immediately, let's try to continue and see if we can reconnect
+  console.log('Continuing without database connection. Will retry...');
+});
 
-// Connection event listeners (simplified to prevent loops)
+// Connection event listeners
 mongoose.connection.on('connected', () => {
   console.log('✅ Mongoose connected to MongoDB Atlas');
 });
@@ -57,6 +44,16 @@ mongoose.connection.on('error', (err) => {
 
 mongoose.connection.on('disconnected', () => {
   console.log('⚠️  Mongoose disconnected from MongoDB Atlas');
+  console.log('Attempting to reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ Mongoose reconnected to MongoDB Atlas');
+});
+
+// Handle initial connection timeout
+mongoose.connection.on('timeout', () => {
+  console.error('❌ MongoDB connection timeout');
 });
 
 // Models
@@ -92,164 +89,75 @@ const upload = multer({
   }
 });
 
-// Add middleware to handle CORS for mobile apps
-app.use('/api/files', (req, res, next) => {
-  // Allow mobile apps to access file endpoints
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Range, Accept-Ranges, User-Agent');
-  res.header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Disposition');
-  
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  
-  next();
-});
-
-// Utility function to detect mobile browsers
-const isMobileDevice = (userAgent) => {
-  return /Mobile|Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(userAgent || '');
-};
-
-const isIOSDevice = (userAgent) => {
-  return /iPhone|iPad|iPod/i.test(userAgent || '');
-};
-
-const isSafari = (userAgent) => {
-  return /Safari/i.test(userAgent || '') && !/Chrome/i.test(userAgent || '');
-};
-
-// Routes with improved error handling
+// Routes
 
 // GET /api/semesters - List all semesters
 app.get('/api/semesters', async (req, res) => {
   try {
-    // Check database connection before querying
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
-    const semesters = await Semester.find().sort({ order: 1 }).lean();
-    console.log('Semesters fetched successfully:', semesters.length, 'items');
+    const semesters = await Semester.find().sort({ order: 1 });
     res.json(semesters);
   } catch (error) {
     console.error('Error fetching semesters:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch semesters',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // GET /api/semesters/:semesterId/types - List types by semester
 app.get('/api/semesters/:semesterId/types', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const types = await Type.find({ semester: req.params.semesterId })
-      .populate('semester')
-      .lean();
+      .populate('semester');
     res.json(types);
   } catch (error) {
     console.error('Error fetching types:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch types',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // GET /api/semesters/:semesterId/types/:typeId/subjects - List subjects
 app.get('/api/semesters/:semesterId/types/:typeId/subjects', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const subjects = await Subject.find({
       semester: req.params.semesterId,
       type: req.params.typeId
-    }).populate(['semester', 'type']).lean();
+    }).populate(['semester', 'type']);
     res.json(subjects);
   } catch (error) {
     console.error('Error fetching subjects:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch subjects',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // GET /api/semesters/:semesterId/types/:typeId/subjects/:subjectId/years
 app.get('/api/semesters/:semesterId/types/:typeId/subjects/:subjectId/years', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const years = await Year.find({
       semester: req.params.semesterId,
       type: req.params.typeId,
       subject: req.params.subjectId
-    }).populate(['semester', 'type', 'subject']).sort({ year: -1 }).lean();
+    }).populate(['semester', 'type', 'subject']).sort({ year: -1 });
     res.json(years);
   } catch (error) {
     console.error('Error fetching years:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch years',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // GET /api/years/:yearId/files - List files by year
 app.get('/api/years/:yearId/files', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const files = await File.find({ year: req.params.yearId })
-      .populate(['semester', 'type', 'subject', 'year'])
-      .lean();
+      .populate(['semester', 'type', 'subject', 'year']);
     res.json(files);
   } catch (error) {
     console.error('Error fetching files:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch files',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // POST /api/upload - Upload a PDF file
 app.post('/api/upload', upload.single('pdf'), async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const { semester, type, subject, year } = req.body;
     
     if (!req.file) {
@@ -331,275 +239,52 @@ app.post('/api/upload', upload.single('pdf'), async (req, res) => {
     res.status(201).json({ message: 'File uploaded successfully', file: fileDoc });
   } catch (error) {
     console.error('Error uploading file:', error);
-    res.status(500).json({ 
-      error: 'Failed to upload file',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/files/:fileId/download - Download a file (mobile-optimized)
+// GET /api/files/:fileId/download - Download a file
 app.get('/api/files/:fileId/download', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const file = await File.findById(req.params.fileId);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Check if file exists on disk
-    if (!fs.existsSync(file.filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
-    }
-
-    // Detect mobile browsers
-    const userAgent = req.headers['user-agent'] || '';
-    const isMobile = isMobileDevice(userAgent);
-    
-    // Get file stats for Content-Length
-    const stat = fs.statSync(file.filePath);
-    
-    // Set download headers
-    res.set({
-      'Content-Type': file.mimeType || 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-      'Content-Length': stat.size,
-      'Cache-Control': 'no-cache',
-      'Accept-Ranges': 'bytes'
-    });
-
-    // For mobile devices, add additional headers to ensure proper download
-    if (isMobile) {
-      res.set({
-        'X-Suggested-Filename': file.originalName,
-        'Access-Control-Expose-Headers': 'Content-Disposition, X-Suggested-Filename'
-      });
-    }
-
-    // Use res.download for better mobile compatibility
-    res.download(file.filePath, file.originalName, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-        if (!res.headersSent) {
-          res.status(500).json({ 
-            error: 'Failed to download file',
-            message: err.message 
-          });
-        }
-      }
-    });
+    res.download(file.filePath, file.originalName);
   } catch (error) {
     console.error('Error downloading file:', error);
-    res.status(500).json({ 
-      error: 'Failed to download file',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/files/:fileId/view - View a file (mobile-optimized)
+// GET /api/files/:fileId/view - View a file
 app.get('/api/files/:fileId/view', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
     const file = await File.findById(req.params.fileId);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Check if file exists on disk
-    if (!fs.existsSync(file.filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
-    }
-
-    // Detect mobile browsers
-    const userAgent = req.headers['user-agent'] || '';
-    const isMobile = isMobileDevice(userAgent);
-    const isIOS = isIOSDevice(userAgent);
-    const isSafariBrowser = isSafari(userAgent);
-    
-    // Set appropriate headers for mobile devices
-    if (file.mimeType === 'application/pdf') {
-      if (isMobile) {
-        // For mobile devices, especially iOS, set headers to force download or proper handling
-        res.set({
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0',
-          // iOS Safari specific headers
-          'X-Content-Type-Options': 'nosniff',
-          // Force Safari to handle PDF properly
-          'Accept-Ranges': 'bytes'
-        });
-        
-        if (isIOS && isSafariBrowser) {
-          // For iOS Safari, sometimes setting as attachment works better
-          res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
-        }
-      } else {
-        // Desktop browsers - inline display
-        res.set({
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
-        });
-      }
-    } else {
-      // Non-PDF files
-      res.set({
-        'Content-Type': file.mimeType,
-        'Content-Disposition': `inline; filename="${encodeURIComponent(file.originalName)}"`,
-      });
-    }
-
-    // Send the file
     res.sendFile(path.resolve(file.filePath));
   } catch (error) {
     console.error('Error viewing file:', error);
-    res.status(500).json({ 
-      error: 'Failed to view file',
-      message: error.message 
-    });
-  }
-});
-
-// GET /api/files/:fileId/stream - Stream a file for mobile devices with range support
-app.get('/api/files/:fileId/stream', async (req, res) => {
-  try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
-    const file = await File.findById(req.params.fileId);
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    // Check if file exists on disk
-    if (!fs.existsSync(file.filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
-    }
-
-    const stat = fs.statSync(file.filePath);
-    const range = req.headers.range;
-
-    if (range) {
-      // Handle range requests for mobile browsers
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-      const chunksize = (end - start) + 1;
-      
-      const fileStream = fs.createReadStream(file.filePath, { start, end });
-      
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': file.mimeType || 'application/pdf',
-        'Cache-Control': 'no-cache'
-      });
-      
-      fileStream.pipe(res);
-    } else {
-      // No range request - send full file
-      res.writeHead(200, {
-        'Content-Length': stat.size,
-        'Content-Type': file.mimeType || 'application/pdf',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-cache'
-      });
-      
-      fs.createReadStream(file.filePath).pipe(res);
-    }
-  } catch (error) {
-    console.error('Error streaming file:', error);
-    res.status(500).json({ 
-      error: 'Failed to stream file',
-      message: error.message 
-    });
-  }
-});
-
-// GET /api/files/:fileId/info - Get file information
-app.get('/api/files/:fileId/info', async (req, res) => {
-  try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ 
-        error: 'Database not connected',
-        status: 'Service Unavailable' 
-      });
-    }
-
-    const file = await File.findById(req.params.fileId)
-      .populate(['semester', 'type', 'subject', 'year'])
-      .lean();
-      
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    // Check if file exists on disk
-    const fileExists = fs.existsSync(file.filePath);
-    
-    const fileInfo = {
-      ...file,
-      exists: fileExists,
-      downloadUrl: `/api/files/${file._id}/download`,
-      viewUrl: `/api/files/${file._id}/view`,
-      streamUrl: `/api/files/${file._id}/stream`
-    };
-
-    res.json(fileInfo);
-  } catch (error) {
-    console.error('Error fetching file info:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch file info',
-      message: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState;
-  const dbStatusText = {
-    0: 'Disconnected',
-    1: 'Connected',
-    2: 'Connecting',
-    3: 'Disconnecting'
-  };
-
   res.json({ 
-    status: dbStatus === 1 ? 'OK' : 'DEGRADED', 
+    status: 'OK', 
     message: 'Server is running',
-    database: dbStatusText[dbStatus] || 'Unknown',
-    timestamp: new Date().toISOString(),
-    userAgent: req.headers['user-agent'] || 'Unknown',
-    isMobile: isMobileDevice(req.headers['user-agent'])
+    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
   });
 });
 
-// Initialize default semesters (improved to prevent duplicates)
+// Initialize default semesters
 async function initializeSemesters() {
   try {
-    console.log('Initializing semesters...');
-    
     const semesters = [
       { name: 'S1', displayName: 'Semestre 1', order: 1 },
       { name: 'S2', displayName: 'Semestre 2', order: 2 },
@@ -608,79 +293,39 @@ async function initializeSemesters() {
       { name: 'S5', displayName: 'Semestre 5', order: 5 }
     ];
 
-    // Use insertMany with ordered: false to handle duplicates gracefully
-    const existingCount = await Semester.countDocuments();
-    
-    if (existingCount === 0) {
-      await Semester.insertMany(semesters, { ordered: false });
-      console.log('✅ All semesters created successfully');
-    } else {
-      console.log(`ℹ️  Found ${existingCount} existing semesters, skipping initialization`);
+    for (const sem of semesters) {
+      const existing = await Semester.findOne({ name: sem.name });
+      if (!existing) {
+        await new Semester(sem).save();
+        console.log(`Created semester: ${sem.displayName}`);
+      }
     }
   } catch (error) {
-    if (error.code === 11000) {
-      console.log('ℹ️  Some semesters already exist, continuing...');
-    } else {
-      console.error('❌ Error initializing semesters:', error.message);
-      throw error;
-    }
+    console.error('Error initializing semesters:', error);
   }
 }
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB Atlas connection closed.');
-  } catch (error) {
-    console.error('❌ Error closing MongoDB connection:', error);
-  }
+  await mongoose.connection.close();
+  console.log('MongoDB Atlas connection closed.');
   process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB Atlas connection closed.');
-  } catch (error) {
-    console.error('❌ Error closing MongoDB connection:', error);
-  }
-  process.exit(0);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
 });
 
 const PORT = process.env.PORT || 5000;
-
-// Start server after database connection is established
-const startServer = async () => {
-  try {
-    // Connect to database first
-    await connectDB();
-    
-    // Start the server
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-      console.log(`📱 Mobile-optimized PDF handling enabled`);
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  
+  // Wait for database connection before initializing
+  if (mongoose.connection.readyState === 1) {
+    await initializeSemesters();
+    console.log('Default semesters initialized');
+  } else {
+    mongoose.connection.once('connected', async () => {
+      await initializeSemesters();
+      console.log('Default semesters initialized');
     });
-  } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
   }
-};
-
-// Start the application
-startServer();
+});
