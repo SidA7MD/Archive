@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, ExternalLink, Smartphone } from 'lucide-react';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, ExternalLink, Smartphone, AlertCircle } from 'lucide-react';
 
 // Color schemes for different file types/states
 const fileThemes = [
@@ -54,8 +54,9 @@ const getDeviceInfo = () => {
   const isAndroid = /android/.test(userAgent);
   const isMobile = /mobile|android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768;
   const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent);
+  const isChrome = /chrome/.test(userAgent) && !/edg/.test(userAgent);
   
-  return { isIOS, isAndroid, isMobile, isSafari };
+  return { isIOS, isAndroid, isMobile, isSafari, isChrome };
 };
 
 // Get meaningful icon based on file extension
@@ -125,9 +126,11 @@ const getFileTheme = (fileName) => {
 };
 
 // Mobile PDF Viewer Component
-const MobilePDFViewer = ({ file, isOpen, onClose }) => {
+const MobilePDFViewer = ({ file, isOpen, onClose, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showTips, setShowTips] = useState(false);
+  const deviceInfo = getDeviceInfo();
 
   const overlayStyle = {
     position: 'fixed',
@@ -164,7 +167,7 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
   const buttonStyle = {
     padding: '1rem 2rem',
     margin: '0.5rem',
-    borderRadius: '8px',
+    borderRadius: '12px',
     border: 'none',
     backgroundColor: '#007AFF',
     color: 'white',
@@ -174,52 +177,155 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
     display: 'flex',
     alignItems: 'center',
     gap: '0.5rem',
+    transition: 'all 0.3s ease',
+    boxShadow: '0 4px 12px rgba(0, 122, 255, 0.3)',
   };
 
+  // Enhanced PDF opening logic
   const handleViewPDF = async () => {
     setLoading(true);
     setError(null);
     
     try {
-      // For mobile devices, especially iOS, we need to handle PDFs differently
-      const { isIOS, isAndroid, isSafari } = getDeviceInfo();
-      const fileUrl = `${window.location.origin.replace(':3000', ':5000')}/api/files/${file._id}/view`;
+      const baseUrl = apiBaseUrl || (window.location.origin.includes(':3000') 
+        ? window.location.origin.replace(':3000', ':5000') 
+        : window.location.origin);
       
-      if (isIOS || isSafari) {
-        // iOS Safari: Force download or open in Safari
-        const response = await fetch(fileUrl);
-        if (!response.ok) throw new Error('Failed to load PDF');
+      const fileUrl = `${baseUrl}/api/files/${file._id}/view`;
+      
+      if (deviceInfo.isIOS) {
+        // iOS - Multiple approaches for better compatibility
+        try {
+          // Method 1: Try direct navigation first (works best on iOS)
+          window.location.href = fileUrl;
+          
+          // Fallback after a short delay
+          setTimeout(() => {
+            if (document.hidden || document.visibilityState === 'hidden') {
+              // PDF likely opened successfully
+              onClose();
+            } else {
+              // Try alternative method
+              const link = document.createElement('a');
+              link.href = fileUrl;
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              link.style.display = 'none';
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+          }, 1000);
+          
+        } catch (err) {
+          console.warn('Direct navigation failed, trying blob approach');
+          
+          // Fallback: Blob approach for iOS
+          const response = await fetch(fileUrl);
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          
+          const link = document.createElement('a');
+          link.href = url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+          }, 1000);
+        }
         
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
+      } else if (deviceInfo.isAndroid) {
+        // Android - Try window.open with fallbacks
+        const newWindow = window.open(fileUrl, '_blank', 'noopener,noreferrer');
         
-        // Create a temporary link to open the PDF
-        const link = document.createElement('a');
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+          // Popup blocked or failed, try direct navigation
+          window.location.href = fileUrl;
+        } else {
+          // Successfully opened in new tab
+          setTimeout(() => {
+            if (newWindow.closed) {
+              onClose();
+            }
+          }, 1000);
+        }
         
       } else {
-        // Android and other browsers
-        window.open(fileUrl, '_blank', 'noopener,noreferrer');
+        // Other mobile browsers
+        const link = document.createElement('a');
+        link.href = fileUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.click();
       }
       
-      onClose();
+      // Close modal after a short delay
+      setTimeout(() => {
+        onClose();
+      }, 1500);
+      
     } catch (err) {
-      setError(err.message);
+      console.error('PDF viewing error:', err);
+      setError(`Failed to open PDF: ${err.message}. Try downloading instead.`);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDownload = () => {
-    const downloadUrl = `${window.location.origin.replace(':3000', ':5000')}/api/files/${file._id}/download`;
-    window.location.href = downloadUrl;
-    onClose();
+  const handleDownload = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const baseUrl = apiBaseUrl || (window.location.origin.includes(':3000') 
+        ? window.location.origin.replace(':3000', ':5000') 
+        : window.location.origin);
+        
+      const downloadUrl = `${baseUrl}/api/files/${file._id}/download`;
+      
+      if (deviceInfo.isIOS || deviceInfo.isSafari) {
+        // iOS Safari - Direct navigation works best
+        window.location.href = downloadUrl;
+      } else {
+        // Android and other browsers - Try to trigger download
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = file.originalName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      
+      onClose();
+    } catch (err) {
+      setError(`Download failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Enhanced button with device-specific text
+  const getViewButtonText = () => {
+    if (deviceInfo.isIOS) return 'Open in Safari';
+    if (deviceInfo.isAndroid) return 'Open PDF';
+    return 'View PDF';
+  };
+
+  const getDeviceSpecificTip = () => {
+    if (deviceInfo.isIOS) {
+      return "On iOS, PDFs open in Safari or your default PDF app. If nothing happens, try the download option.";
+    }
+    if (deviceInfo.isAndroid) {
+      return "On Android, choose your preferred PDF app when prompted. Download if the PDF doesn't open properly.";
+    }
+    return "If the PDF doesn't open, try downloading it to view with your device's PDF reader.";
   };
 
   if (!isOpen) return null;
@@ -227,7 +333,9 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
   return (
     <div style={overlayStyle}>
       <div style={headerStyle}>
-        <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{file.originalName}</h3>
+        <h3 style={{ margin: 0, fontSize: '1.2rem', flex: 1, textAlign: 'left' }}>
+          {file.originalName}
+        </h3>
         <button 
           onClick={onClose}
           style={{ 
@@ -236,7 +344,13 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
             color: 'white', 
             fontSize: '1.5rem',
             cursor: 'pointer',
-            padding: '0.5rem'
+            padding: '0.5rem',
+            borderRadius: '50%',
+            width: '40px',
+            height: '40px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
           }}
         >
           ✕
@@ -245,15 +359,23 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
       
       <div style={contentStyle}>
         <div style={{ marginBottom: '2rem' }}>
-          <Smartphone size={64} color="white" style={{ marginBottom: '1rem' }} />
-          <h4 style={{ marginBottom: '1rem' }}>Choose how to view this PDF</h4>
-          <p style={{ opacity: 0.8, marginBottom: '2rem', maxWidth: '300px' }}>
-            Mobile browsers handle PDFs differently. Choose the best option for your device.
+          <div style={{ 
+            background: 'linear-gradient(135deg, #007AFF, #0056CC)',
+            borderRadius: '50%',
+            padding: '1rem',
+            marginBottom: '1rem',
+            display: 'inline-block'
+          }}>
+            <FileText size={48} color="white" />
+          </div>
+          <h4 style={{ marginBottom: '0.5rem', fontSize: '1.4rem' }}>PDF Viewer</h4>
+          <p style={{ opacity: 0.8, marginBottom: '1rem', maxWidth: '320px', fontSize: '0.9rem' }}>
+            {deviceInfo.isIOS ? 'iOS Device Detected' : deviceInfo.isAndroid ? 'Android Device Detected' : 'Mobile Device'}
           </p>
         </div>
 
         {loading && (
-          <div style={{ marginBottom: '1rem' }}>
+          <div style={{ marginBottom: '1.5rem' }}>
             <div style={{ 
               border: '3px solid rgba(255,255,255,0.3)',
               borderTop: '3px solid white',
@@ -261,35 +383,52 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
               width: '32px',
               height: '32px',
               animation: 'spin 1s linear infinite',
-              margin: '0 auto'
+              margin: '0 auto 1rem auto'
             }}></div>
+            <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Opening PDF...</p>
           </div>
         )}
 
         {error && (
           <div style={{ 
             color: '#ff4757', 
-            marginBottom: '1rem',
+            marginBottom: '1.5rem',
             padding: '1rem',
             backgroundColor: 'rgba(255, 71, 87, 0.1)',
-            borderRadius: '8px'
+            borderRadius: '12px',
+            border: '1px solid rgba(255, 71, 87, 0.3)',
+            maxWidth: '320px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.5rem'
           }}>
-            Error: {error}
+            <AlertCircle size={20} style={{ marginTop: '0.1rem', flexShrink: 0 }} />
+            <span style={{ fontSize: '0.9rem' }}>{error}</span>
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '300px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '300px', gap: '0.75rem' }}>
           <button 
-            style={buttonStyle}
+            style={{
+              ...buttonStyle,
+              backgroundColor: loading ? '#999' : '#007AFF',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1
+            }}
             onClick={handleViewPDF}
             disabled={loading}
           >
             <ExternalLink size={20} />
-            Open in Browser
+            {getViewButtonText()}
           </button>
           
           <button 
-            style={{ ...buttonStyle, backgroundColor: '#34c759' }}
+            style={{ 
+              ...buttonStyle, 
+              backgroundColor: loading ? '#999' : '#34c759',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1
+            }}
             onClick={handleDownload}
             disabled={loading}
           >
@@ -298,15 +437,41 @@ const MobilePDFViewer = ({ file, isOpen, onClose }) => {
           </button>
         </div>
         
-        <p style={{ 
-          opacity: 0.6, 
-          fontSize: '0.9rem', 
-          marginTop: '2rem',
-          maxWidth: '320px',
-          lineHeight: '1.4'
-        }}>
-          💡 Tip: If the PDF doesn't open properly, try downloading it and opening with your device's PDF reader app.
-        </p>
+        <button
+          onClick={() => setShowTips(!showTips)}
+          style={{
+            background: 'none',
+            border: '1px solid rgba(255,255,255,0.3)',
+            color: 'white',
+            padding: '0.5rem 1rem',
+            borderRadius: '20px',
+            fontSize: '0.85rem',
+            marginTop: '1.5rem',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}
+        >
+          💡 {showTips ? 'Hide' : 'Show'} Tips
+        </button>
+
+        {showTips && (
+          <div style={{ 
+            opacity: 0.8, 
+            fontSize: '0.85rem', 
+            marginTop: '1rem',
+            maxWidth: '320px',
+            lineHeight: '1.5',
+            padding: '1rem',
+            backgroundColor: 'rgba(255,255,255,0.1)',
+            borderRadius: '12px',
+            border: '1px solid rgba(255,255,255,0.2)'
+          }}>
+            <p style={{ margin: '0 0 0.5rem 0', fontWeight: '600' }}>Device-specific tip:</p>
+            <p style={{ margin: 0 }}>{getDeviceSpecificTip()}</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -342,7 +507,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
 
   const handleView = () => {
     if (deviceInfo.isMobile && isPDF(file.originalName)) {
-      // On mobile, show our custom viewer for PDFs
+      // On mobile, show our enhanced viewer for PDFs
       setShowMobileViewer(true);
     } else {
       // Desktop behavior - open in new tab
@@ -368,7 +533,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     }
   };
 
-  // Component styles (keeping your existing styles)
+  // Component styles
   const containerStyle = {
     width: '100%',
     maxWidth: isDesktop ? '1200px' : '350px',
@@ -479,7 +644,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     boxShadow: `0 4px 15px ${theme.shadow}`,
   };
 
-  // Add mobile indicator for PDFs
+  // Enhanced mobile indicator for PDFs
   const mobileIndicatorStyle = deviceInfo.isMobile && isPDF(file.originalName) ? {
     position: 'absolute',
     top: '10px',
@@ -493,6 +658,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     display: 'flex',
     alignItems: 'center',
     gap: '0.25rem',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
   } : { display: 'none' };
 
   // Animation styles
@@ -500,18 +666,6 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
     @keyframes spin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
-    }
-    @keyframes float1 {
-      0%, 100% { transform: translateY(0px) rotate(0deg); }
-      50% { transform: translateY(-12px) rotate(6deg); }
-    }
-    @keyframes float2 {
-      0%, 100% { transform: translateY(0px) rotate(0deg); }
-      50% { transform: translateY(-10px) rotate(-4deg); }
-    }
-    @keyframes twinkle {
-      0%, 100% { opacity: 0.3; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.8); }
     }
     @keyframes iconGlow {
       0% { filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3)); }
@@ -527,7 +681,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
         <div style={headerStyle}>
           <div style={mobileIndicatorStyle}>
             <Smartphone size={12} />
-            Mobile
+            {deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'Mobile'}
           </div>
           
           <div style={{
@@ -574,6 +728,7 @@ export const FileCard = ({ file, apiBaseUrl = 'http://localhost:5000' }) => {
         file={file}
         isOpen={showMobileViewer}
         onClose={() => setShowMobileViewer(false)}
+        apiBaseUrl={apiBaseUrl}
       />
     </>
   );
@@ -588,9 +743,14 @@ const PDFAppDemo = () => {
       fileSize: 2048576,
     },
     {
-      _id: '2',
+      _id: '2', 
       originalName: 'presentation_slides.pptx',
       fileSize: 5242880,
+    },
+    {
+      _id: '3',
+      originalName: 'technical_documentation.pdf',
+      fileSize: 1024000,
     },
   ];
 
