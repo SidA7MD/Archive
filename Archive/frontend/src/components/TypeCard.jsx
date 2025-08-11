@@ -68,347 +68,6 @@ const getTypeStyle = (typeName) => {
 export const TypeCard = ({ type, semesterId }) => {
   const style = getTypeStyle(type.name);
 
-  const cardStyle = {
-    width: '100%',
-    minWidth: '400px',
-    maxWidth: '500px',
-    height: '480px',
-    minHeight: '480px',
-    borderRadius: '24px',
-    boxShadow: `0 6px 25px rgba(0, 0, 0, 0.1), 0 2px 12px rgba(0, 0, 0, 0.05)`,
-    backgroundColor: 'white',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    cursor: 'pointer',
-    border: '1px solid rgba(255, 255, 255, 0.8)',
-    position: 'relative',
-    textDecoration: 'none',
-    color: 'inherit',
-    backdropFilter: 'blur(10px)',
-    WebkitBackdropFilter: 'blur(10px)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    margin: '12px',
-    '@media (min-width: 768px)': {
-      borderRadius: '32px',
-      margin: '20px',
-      minHeight: '540px',
-      maxWidth: '600px',
-    },
-    '@media (min-width: 1024px)': {
-      borderRadius: '40px',
-      // margin: '28px',
-      minHeight: '560px',
-      maxWidth: '720px',
-    },
-    '@media (min-width: 1440px)': {
-      borderRadius: '48px',
-      margin: '32px',
-      minHeight: '760px',
-      maxWidth: '820px',
-    }
-  };
-
-  const headerStyle = {
-    height: '340px',
-    background: style.gradient,
-    position: 'relative',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    padding: '1.5rem',
-    '@media (min-width: 768px)': {
-      height: '420px',
-      padding: '2.2rem',
-    },
-    '@media (min-width: 1024px)': {
-      height: '400px',
-      padding: '3rem',
-    },
-    '@media (min-width: 1440px)': {
-      height: '460px',
-      padding: '3.5rem',
-    }
-  };
-
-  // Background Image
-  const backgroundImageStyle = {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundImage: `url(${style.image})`,
-    backgroundSize: 'cover',
-    backgroundPosition: 'center',
-    opacity: 0.3,
-    mixBlendMode: 'overlay',
-  };
-
-  // Subtle dark overlay for better readability
-  const overlayStyle = {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: 'rgba(0, 0, 0, 0.1)',
-  };
-
-  // Mobile-optimized decorative elements
-  const decorativeElementStyle1 = {
-    position: 'absolute',
-    top: '-30px',
-    right: '-30px',
-    width: '70px',
-    height: '70px',
-    background: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: '50%',
-    animation: 'float1 6s ease-in-out infinite',
-    '@media (min-width: 768px)': {
-      top: '-35px',
-      right: '-35px',
-      width: '90px',
-      height: '90px',
-    },
-    '@media (min-width: 1024px)': {
-      top: '-40px',
-      right: '-40px',
-      width: '120px',
-      height: '120px',
-    }
-  };
-
-  const decorativeElementStyle2 = {
-    position: 'absolute',
-    bottom: '-15px',
-    left: '-15px',
-    width: '50px',
-    height: '50px',
-    background: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: '50%',
-    animation: 'float2 8s ease-in-out infinite',
-    '@media (min-width: 768px)': {
-      bottom: '-18px',
-      left: '-18px',
-      width: '65px',
-      height: '65px',
-    },
-    '@media (min-width: 1024px)': {
-      bottom: '-20px',
-      left: '-20px',
-      width: '80px',
-      height: '80px',
-    }
-  };
-
-  const decorativeElementStyle3 = {
-    position: 'absolute',
-    top: '20%',
-    left: '15%',
-    width: '4px',
-    height: '4px',
-    background: 'rgba(255, 255, 255, 0.4)',
-    borderRadius: '50%',
-    animation: 'twinkle 4s ease-in-out infinite',
-    '@media (min-width: 768px)': {
-      width: '5px',
-      height: '5px',
-    },
-    '@media (min-width: 1024px)': {
-      width: '6px',
-      height: '6px',
-    }
-  };
-
-  const decorativeElementStyle4 = {
-    position: 'absolute',
-    bottom: '30%',
-    right: '20%',
-    width: '3px',
-    height: '3px',
-    background: 'rgba(255, 255, 255, 0.6)',
-    borderRadius: '50%',
-    animation: 'twinkle 3s ease-in-out infinite 1s',
-    '@media (min-width: 768px)': {
-      width: '4px',
-      height: '4px',
-    },
-    '@media (min-width: 1024px)': {
-      width: '4px',
-      height: '4px',
-    }
-  };
-
-  // Mobile-first icon style
-  const iconStyle = {
-    width: '52px',
-    height: '52px',
-    background: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: '14px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '1.3rem',
-    backdropFilter: 'blur(10px)',
-    border: '1px solid rgba(255, 255, 255, 0.3)',
-    zIndex: 2,
-    '@media (min-width: 768px)': {
-      width: '68px',
-      height: '68px',
-      fontSize: '1.7rem',
-      borderRadius: '18px',
-    },
-    '@media (min-width: 1024px)': {
-      width: '84px',
-      height: '84px',
-      fontSize: '2.1rem',
-      borderRadius: '24px',
-    },
-    '@media (min-width: 1440px)': {
-      width: '96px',
-      height: '96px',
-      fontSize: '2.4rem',
-      borderRadius: '28px',
-    }
-  };
-
-  // Mobile-first title style
-  const titleStyle = {
-    fontSize: '1.6rem',
-    fontWeight: '700',
-    color: 'white',
-    margin: 0,
-    textShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
-    lineHeight: '1.2',
-    textTransform: 'capitalize',
-    zIndex: 2,
-    letterSpacing: '-0.02em',
-    '@media (min-width: 768px)': {
-      fontSize: '2.2rem',
-    },
-    '@media (min-width: 1024px)': {
-      fontSize: '2.8rem',
-      letterSpacing: '-0.025em',
-    },
-    '@media (min-width: 1440px)': {
-      fontSize: '3.2rem',
-      letterSpacing: '-0.03em',
-    }
-  };
-
-  // Mobile-optimized content area
-  const contentStyle = {
-    padding: '1.25rem',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1.2rem',
-    flex: 1,
-    justifyContent: 'space-between',
-    background: 'linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,1) 100%)',
-    minHeight: '180px',
-    '@media (min-width: 768px)': {
-      padding: '1.8rem',
-      gap: '1.5rem',
-      minHeight: '220px',
-    },
-    '@media (min-width: 1024px)': {
-      padding: '2.4rem',
-      gap: '1.8rem',
-      minHeight: '260px',
-    },
-    '@media (min-width: 1440px)': {
-      padding: '2.8rem',
-      gap: '2rem',
-      minHeight: '300px',
-    }
-  };
-
-  // Mobile-first description
-  const descriptionStyle = {
-    fontSize: '1rem',
-    color: '#64748b',
-    margin: 0,
-    lineHeight: '1.5',
-    fontWeight: '400',
-    flex: 1,
-    letterSpacing: '0.01em',
-    '@media (min-width: 768px)': {
-      fontSize: '1.15rem',
-      lineHeight: '1.6',
-    },
-    '@media (min-width: 1024px)': {
-      fontSize: '1.3rem',
-      lineHeight: '1.6',
-    },
-    '@media (min-width: 1440px)': {
-      fontSize: '1.4rem',
-      lineHeight: '1.65',
-    }
-  };
-
-  // Mobile-optimized button
-  const buttonStyle = {
-    background: `linear-gradient(135deg, ${style.color}12, ${style.color}08, transparent)`,
-    border: `2px solid ${style.color}20`,
-    color: style.color,
-    borderRadius: '18px',
-    padding: '1rem 1.5rem',
-    fontSize: '0.95rem',
-    fontWeight: '700',
-    cursor: 'pointer',
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    outline: 'none',
-    width: '100%',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-    letterSpacing: '0.02em',
-    textTransform: 'uppercase',
-    minHeight: '52px', // Ensures touch-friendly size
-    '@media (min-width: 768px)': {
-      borderRadius: '24px',
-      padding: '1.2rem 1.8rem',
-      fontSize: '1.1rem',
-      gap: '14px',
-      minHeight: '58px',
-    },
-    '@media (min-width: 1024px)': {
-      borderRadius: '28px',
-      padding: '1.4rem 2.2rem',
-      fontSize: '1.25rem',
-      gap: '16px',
-      minHeight: '64px',
-    },
-    '@media (min-width: 1440px)': {
-      borderRadius: '32px',
-      padding: '1.6rem 2.6rem',
-      fontSize: '1.35rem',
-      gap: '18px',
-      minHeight: '70px',
-    }
-  };
-
-  const arrowStyle = {
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    fontSize: '1.1rem',
-    fontWeight: 'bold',
-    '@media (min-width: 768px)': {
-      fontSize: '1.25rem',
-    },
-    '@media (min-width: 1024px)': {
-      fontSize: '1.4rem',
-    },
-    '@media (min-width: 1440px)': {
-      fontSize: '1.5rem',
-    }
-  };
-
   // Enhanced hover handlers with better mobile support
   const handleCardHover = (e, isHovering) => {
     // Only apply hover effects on non-touch devices
@@ -474,55 +133,552 @@ export const TypeCard = ({ type, semesterId }) => {
             50% { opacity: 1; transform: scale(1.3); }
           }
           
-          /* Mobile-specific optimizations */
-          @media (max-width: 767px) {
+          .type-card {
+            width: 100%;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 8px rgba(0, 0, 0, 0.04);
+            background-color: white;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            position: relative;
+            text-decoration: none;
+            color: inherit;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 8px;
+            min-height: 340px;
+            max-width: none;
+          }
+          
+          .type-card-header {
+            height: 180px;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 1.2rem;
+          }
+          
+          .type-card-content {
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            flex: 1;
+            justify-content: space-between;
+            background: linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,1) 100%);
+            min-height: 140px;
+          }
+          
+          .type-card-icon {
+            width: 44px;
+            height: 44px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            z-index: 2;
+          }
+          
+          .type-card-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: white;
+            margin: 0;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            line-height: 1.2;
+            text-transform: capitalize;
+            z-index: 2;
+            letter-spacing: -0.01em;
+          }
+          
+          .type-card-description {
+            font-size: 0.9rem;
+            color: #64748b;
+            margin: 0;
+            line-height: 1.4;
+            font-weight: 400;
+            flex: 1;
+            letter-spacing: 0.01em;
+          }
+          
+          .type-card-button {
+            border: 2px solid transparent;
+            border-radius: 14px;
+            padding: 0.8rem 1.2rem;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            outline: none;
+            width: 100%;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            min-height: 46px;
+          }
+          
+          .arrow {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 1rem;
+            font-weight: bold;
+          }
+          
+          .background-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-size: cover;
+            background-position: center;
+            opacity: 0.3;
+            mix-blend-mode: overlay;
+          }
+          
+          .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.1);
+          }
+          
+          .decorative-1 {
+            position: absolute;
+            top: -25px;
+            right: -25px;
+            width: 55px;
+            height: 55px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 50%;
+            animation: float1 6s ease-in-out infinite;
+          }
+          
+          .decorative-2 {
+            position: absolute;
+            bottom: -12px;
+            left: -12px;
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            animation: float2 8s ease-in-out infinite;
+          }
+          
+          .decorative-3 {
+            position: absolute;
+            top: 20%;
+            left: 15%;
+            width: 3px;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 50%;
+            animation: twinkle 4s ease-in-out infinite;
+          }
+          
+          .decorative-4 {
+            position: absolute;
+            bottom: 30%;
+            right: 20%;
+            width: 2px;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: twinkle 3s ease-in-out infinite 1s;
+          }
+          
+          /* Extra Small Phones (320px - 374px) */
+          @media (max-width: 374px) {
             .type-card {
-              margin: 8px !important;
-              border-radius: 20px !important;
-              min-height: 380px !important;
+              margin: 6px;
+              border-radius: 14px;
+              min-height: 320px;
             }
             .type-card-header {
-              height: 220px !important;
-              padding: 1.4rem !important;
+              height: 160px;
+              padding: 1rem;
             }
             .type-card-content {
-              padding: 1.1rem !important;
-              gap: 1.1rem !important;
-              min-height: 160px !important;
+              padding: 0.9rem;
+              gap: 0.9rem;
+              min-height: 130px;
             }
             .type-card-title {
-              font-size: 1.5rem !important;
+              font-size: 1.25rem;
             }
             .type-card-description {
-              font-size: 0.95rem !important;
-              line-height: 1.45 !important;
+              font-size: 0.85rem;
+              line-height: 1.35;
             }
             .type-card-button {
-              padding: 0.9rem 1.35rem !important;
-              font-size: 0.9rem !important;
-              border-radius: 16px !important;
-              min-height: 50px !important;
+              padding: 0.7rem 1rem;
+              font-size: 0.8rem;
+              border-radius: 12px;
+              min-height: 42px;
+              gap: 8px;
             }
             .type-card-icon {
-              width: 48px !important;
-              height: 48px !important;
-              font-size: 1.2rem !important;
-              border-radius: 12px !important;
+              width: 40px;
+              height: 40px;
+              font-size: 1rem;
+              border-radius: 10px;
+            }
+            .arrow {
+              font-size: 0.9rem;
             }
           }
           
-          /* Ensure touch targets are large enough */
-          @media (max-width: 480px) {
+          /* Small Phones (375px - 413px) */
+          @media (min-width: 375px) and (max-width: 413px) {
+            .type-card {
+              margin: 7px;
+              border-radius: 15px;
+              min-height: 350px;
+            }
+            .type-card-header {
+              height: 170px;
+              padding: 1.1rem;
+            }
+            .type-card-content {
+              padding: 0.95rem;
+              gap: 0.95rem;
+              min-height: 135px;
+            }
+            .type-card-title {
+              font-size: 1.3rem;
+            }
+            .type-card-description {
+              font-size: 0.87rem;
+              line-height: 1.37;
+            }
             .type-card-button {
-              min-height: 48px !important;
-              padding: 0.8rem 1.2rem !important;
+              padding: 0.75rem 1.1rem;
+              font-size: 0.82rem;
+              border-radius: 13px;
+              min-height: 44px;
+              gap: 9px;
+            }
+            .type-card-icon {
+              width: 42px;
+              height: 42px;
+              font-size: 1.05rem;
+              border-radius: 11px;
+            }
+            .arrow {
+              font-size: 0.95rem;
+            }
+          }
+          
+          /* Medium Phones (414px - 479px) */
+          @media (min-width: 414px) and (max-width: 479px) {
+            .type-card {
+              margin: 8px;
+              border-radius: 16px;
+              min-height: 360px;
+            }
+            .type-card-header {
+              height: 180px;
+              padding: 1.2rem;
+            }
+            .type-card-content {
+              padding: 1rem;
+              gap: 1rem;
+              min-height: 140px;
+            }
+            .type-card-title {
+              font-size: 1.35rem;
+            }
+            .type-card-description {
+              font-size: 0.88rem;
+              line-height: 1.38;
+            }
+            .type-card-button {
+              padding: 0.8rem 1.15rem;
+              font-size: 0.84rem;
+              border-radius: 14px;
+              min-height: 46px;
+              gap: 9px;
+            }
+            .type-card-icon {
+              width: 43px;
+              height: 43px;
+              font-size: 1.08rem;
+              border-radius: 11px;
+            }
+          }
+          
+          /* Large Phones (480px - 767px) */
+          @media (min-width: 480px) and (max-width: 767px) {
+            .type-card {
+              margin: 10px;
+              border-radius: 18px;
+              min-height: 380px;
+            }
+            .type-card-header {
+              height: 200px;
+              padding: 1.3rem;
+            }
+            .type-card-content {
+              padding: 1.1rem;
+              gap: 1.1rem;
+              min-height: 150px;
+            }
+            .type-card-title {
+              font-size: 1.45rem;
+            }
+            .type-card-description {
+              font-size: 0.92rem;
+              line-height: 1.42;
+            }
+            .type-card-button {
+              padding: 0.85rem 1.25rem;
+              font-size: 0.87rem;
+              border-radius: 15px;
+              min-height: 48px;
+              gap: 10px;
+            }
+            .type-card-icon {
+              width: 46px;
+              height: 46px;
+              font-size: 1.15rem;
+              border-radius: 12px;
+            }
+            .decorative-1 {
+              width: 60px;
+              height: 60px;
+              top: -30px;
+              right: -30px;
+            }
+            .decorative-2 {
+              width: 45px;
+              height: 45px;
+              bottom: -15px;
+              left: -15px;
+            }
+          }
+          
+          /* Tablets (768px and up) */
+          @media (min-width: 768px) {
+            .type-card {
+              border-radius: 24px;
+              margin: 15px;
+              min-height: 480px;
+              max-width: 500px;
+            }
+            .type-card-header {
+              height: 280px;
+              padding: 2rem;
+            }
+            .type-card-content {
+              padding: 1.5rem;
+              gap: 1.3rem;
+              min-height: 180px;
+            }
+            .type-card-title {
+              font-size: 2rem;
+            }
+            .type-card-description {
+              font-size: 1.1rem;
+              line-height: 1.5;
+            }
+            .type-card-button {
+              padding: 1.1rem 1.6rem;
+              font-size: 1rem;
+              border-radius: 20px;
+              min-height: 56px;
+              gap: 12px;
+            }
+            .type-card-icon {
+              width: 60px;
+              height: 60px;
+              font-size: 1.5rem;
+              border-radius: 16px;
+            }
+            .arrow {
+              font-size: 1.2rem;
+            }
+            .decorative-1 {
+              width: 80px;
+              height: 80px;
+              top: -35px;
+              right: -35px;
+            }
+            .decorative-2 {
+              width: 60px;
+              height: 60px;
+              bottom: -18px;
+              left: -18px;
+            }
+            .decorative-3 {
+              width: 4px;
+              height: 4px;
+            }
+            .decorative-4 {
+              width: 3px;
+              height: 3px;
+            }
+          }
+          
+          /* Desktop */
+          @media (min-width: 1024px) {
+            .type-card {
+              border-radius: 28px;
+              margin: 16px;
+              min-height: 460px;
+              max-width: 480px;
+            }
+            .type-card-header {
+              height: 260px;
+              padding: 2rem;
+            }
+            .type-card-content {
+              padding: 1.6rem;
+              gap: 1.2rem;
+              min-height: 170px;
+            }
+            .type-card-title {
+              font-size: 2rem;
+              letter-spacing: -0.02em;
+            }
+            .type-card-description {
+              font-size: 1.1rem;
+              line-height: 1.5;
+            }
+            .type-card-button {
+              padding: 1.1rem 1.6rem;
+              font-size: 1rem;
+              border-radius: 20px;
+              min-height: 54px;
+              gap: 12px;
+            }
+            .type-card-icon {
+              width: 60px;
+              height: 60px;
+              font-size: 1.5rem;
+              border-radius: 16px;
+            }
+            .arrow {
+              font-size: 1.15rem;
+            }
+          }
+          
+          /* Large Desktop */
+          @media (min-width: 1440px) {
+            .type-card {
+              border-radius: 32px;
+              margin: 18px;
+              min-height: 500px;
+              max-width: 520px;
+            }
+            .type-card-header {
+              height: 280px;
+              padding: 2.2rem;
+            }
+            .type-card-content {
+              padding: 1.8rem;
+              gap: 1.4rem;
+              min-height: 180px;
+            }
+            .type-card-title {
+              font-size: 2.2rem;
+              letter-spacing: -0.02em;
+            }
+            .type-card-description {
+              font-size: 1.15rem;
+              line-height: 1.55;
+            }
+            .type-card-button {
+              padding: 1.2rem 1.8rem;
+              font-size: 1.05rem;
+              border-radius: 22px;
+              min-height: 56px;
+              gap: 13px;
+            }
+            .type-card-icon {
+              width: 64px;
+              height: 64px;
+              font-size: 1.6rem;
+              border-radius: 18px;
+            }
+            .arrow {
+              font-size: 1.2rem;
+            }
+            .decorative-1 {
+              width: 80px;
+              height: 80px;
+              top: -35px;
+              right: -35px;
+            }
+            .decorative-2 {
+              width: 60px;
+              height: 60px;
+              bottom: -18px;
+              left: -18px;
+            }
+            .decorative-3 {
+              width: 4px;
+              height: 4px;
+            }
+            .decorative-4 {
+              width: 3px;
+              height: 3px;
+            }
+          }
+          
+          /* Landscape orientation optimizations for phones */
+          @media (max-height: 500px) and (orientation: landscape) {
+            .type-card {
+              min-height: 280px;
+            }
+            .type-card-header {
+              height: 140px;
+              padding: 1rem;
+            }
+            .type-card-content {
+              padding: 0.8rem;
+              gap: 0.8rem;
+              min-height: 120px;
+            }
+            .type-card-title {
+              font-size: 1.2rem;
+            }
+            .type-card-description {
+              font-size: 0.8rem;
+              line-height: 1.3;
+            }
+            .type-card-button {
+              padding: 0.6rem 1rem;
+              font-size: 0.75rem;
+              min-height: 38px;
+            }
+            .type-card-icon {
+              width: 36px;
+              height: 36px;
+              font-size: 0.9rem;
             }
           }
         `
       }} />
+      
       <Link 
         to={`/semester/${semesterId}/type/${type._id}/subjects`}
-        style={cardStyle}
         className="type-card"
         onMouseEnter={(e) => handleCardHover(e, true)}
         onMouseLeave={(e) => handleCardHover(e, false)}
@@ -530,43 +686,53 @@ export const TypeCard = ({ type, semesterId }) => {
         onTouchEnd={handleTouchEnd}
       >
         {/* Header with gradient and background image */}
-        <div style={headerStyle} className="type-card-header">
+        <div 
+          className="type-card-header"
+          style={{ background: style.gradient }}
+        >
           {/* Background Image */}
-          <div style={backgroundImageStyle} />
+          <div 
+            className="background-image" 
+            style={{ backgroundImage: `url(${style.image})` }}
+          />
 
           {/* Subtle dark overlay for better readability */}
-          <div style={overlayStyle} />
+          <div className="overlay" />
 
-          {/* Enhanced decorative elements - smaller on mobile */}
-          <div style={decorativeElementStyle1}></div>
-          <div style={decorativeElementStyle2}></div>
-          <div style={decorativeElementStyle3}></div>
-          <div style={decorativeElementStyle4}></div>
+          {/* Enhanced decorative elements */}
+          <div className="decorative-1"></div>
+          <div className="decorative-2"></div>
+          <div className="decorative-3"></div>
+          <div className="decorative-4"></div>
 
           {/* Icon */}
-          <div style={iconStyle} className="type-card-icon">
+          <div className="type-card-icon">
             {style.icon}
           </div>
 
           {/* Title */}
           <div>
-            <h3 style={titleStyle} className="type-card-title">
+            <h3 className="type-card-title">
               {type.displayName}
             </h3>
           </div>
         </div>
 
         {/* Content */}
-        <div style={contentStyle} className="type-card-content">
+        <div className="type-card-content">
           {/* Description */}
-          <p style={descriptionStyle} className="type-card-description">
+          <p className="type-card-description">
             {style.description}
           </p>
 
           {/* Button */}
           <button
-            style={buttonStyle}
             className="type-card-button"
+            style={{
+              background: `linear-gradient(135deg, ${style.color}12, ${style.color}08, transparent)`,
+              borderColor: `${style.color}20`,
+              color: style.color
+            }}
             onMouseEnter={(e) => handleButtonHover(e, true)}
             onMouseLeave={(e) => handleButtonHover(e, false)}
             onClick={(e) => {
@@ -574,7 +740,7 @@ export const TypeCard = ({ type, semesterId }) => {
             }}
           >
             Ouvrir 
-            <span className="arrow" style={arrowStyle}>→</span>
+            <span className="arrow">→</span>
           </button>
         </div>
       </Link>

@@ -73,171 +73,52 @@ export const SemesterCard = ({ semester }) => {
   const sectionStyle = getSemesterStyle(semester.displayName);
   const semesterLabel = extractSemesterLabel(semester.displayName);
 
-  const cardStyle = {
-    width: 'clamp(320px, 90vw, 420px)',
-    height: 'clamp(420px, 55vw, 520px)',
-    borderRadius: '32px',
-    boxShadow: `0 8px 30px rgba(0, 0, 0, 0.06), 0 2px 12px rgba(0, 0, 0, 0.03)`,
-    backgroundColor: 'white',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    cursor: 'pointer',
-    border: '1px solid rgba(255, 255, 255, 0.8)',
-    position: 'relative',
-    textDecoration: 'none',
-    color: 'inherit',
-    backdropFilter: 'blur(10px)',
-    WebkitBackdropFilter: 'blur(10px)',
-  };
-
-  const curveTopStyle = {
-    height: 'clamp(260px, 40vw, 320px)',
-    background: sectionStyle.gradient,
-    borderBottomLeftRadius: '85% 45%',
-    borderBottomRightRadius: '85% 45%',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: 'white',
-    position: 'relative',
-    overflow: 'hidden',
-  };
-
-  // Enhanced decorative elements with better mobile scaling
-  const decorativeElementStyle1 = {
-    position: 'absolute',
-    top: '-60px',
-    right: '-60px',
-    width: 'clamp(100px, 20vw, 150px)',
-    height: 'clamp(100px, 20vw, 150px)',
-    background: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: '50%',
-    animation: 'float1 6s ease-in-out infinite',
-  };
-
-  const decorativeElementStyle2 = {
-    position: 'absolute',
-    bottom: '-30px',
-    left: '-30px',
-    width: 'clamp(70px, 16vw, 100px)',
-    height: 'clamp(70px, 16vw, 100px)',
-    background: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: '50%',
-    animation: 'float2 8s ease-in-out infinite',
-  };
-
-  // Additional decorative elements with mobile scaling
-  const decorativeElementStyle3 = {
-    position: 'absolute',
-    top: '20%',
-    left: '15%',
-    width: 'clamp(4px, 1vw, 6px)',
-    height: 'clamp(4px, 1vw, 6px)',
-    background: 'rgba(255, 255, 255, 0.4)',
-    borderRadius: '50%',
-    animation: 'twinkle 4s ease-in-out infinite',
-  };
-
-  const decorativeElementStyle4 = {
-    position: 'absolute',
-    bottom: '30%',
-    right: '20%',
-    width: 'clamp(3px, 0.8vw, 4px)',
-    height: 'clamp(3px, 0.8vw, 4px)',
-    background: 'rgba(255, 255, 255, 0.6)',
-    borderRadius: '50%',
-    animation: 'twinkle 3s ease-in-out infinite 1s',
-  };
-
-  const labelStyle = {
-    fontSize: 'clamp(2.0rem, 6vw, 2.8rem)',
-    fontWeight: '800',
-    textShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
-    zIndex: 3,
-    marginBottom: '12px',
-    letterSpacing: '-0.02em',
-  };
-
-  const descriptionStyle = {
-    fontSize: 'clamp(0.9rem, 3vw, 1.2rem)',
-    opacity: 0.95,
-    fontWeight: '500',
-    zIndex: 3,
-    textShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-    letterSpacing: '0.01em',
-  };
-
-  const contentStyle = {
-    padding: 'clamp(1.5rem, 4vw, 2rem)',
-    textAlign: 'center',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,1) 100%)',
-  };
-
-  const buttonStyle = {
-    background: `linear-gradient(135deg, ${sectionStyle.color}12, ${sectionStyle.color}08, transparent)`,
-    border: `2px solid ${sectionStyle.color}20`,
-    color: sectionStyle.color,
-    borderRadius: '24px',
-    padding: 'clamp(0.8rem, 3vw, 1.1rem) clamp(1.4rem, 5vw, 1.9rem)',
-    fontSize: 'clamp(0.85rem, 3vw, 1.1rem)',
-    fontWeight: '700',
-    cursor: 'pointer',
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    outline: 'none',
-    width: '100%',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-    letterSpacing: '0.02em',
-    textTransform: 'uppercase',
-    minHeight: '48px', // Ensures touch target on mobile
-  };
-
-  const arrowStyle = {
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    fontSize: 'clamp(0.95rem, 3vw, 1.2rem)',
-    fontWeight: 'bold',
-  };
-
   // Refined hover handlers with subtle effects
   const handleCardHover = (e, isHovering) => {
-    if (isHovering) {
-      e.currentTarget.style.transform = 'translateY(-8px) scale(1.01)';
-      e.currentTarget.style.boxShadow = `0 16px 50px rgba(0, 0, 0, 0.08), 0 6px 24px ${sectionStyle.shadow}`;
-      e.currentTarget.style.borderColor = `${sectionStyle.color}20`;
-    } else {
-      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-      e.currentTarget.style.boxShadow = '0 8px 30px rgba(0, 0, 0, 0.06), 0 2px 12px rgba(0, 0, 0, 0.03)';
-      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.8)';
+    // Only apply hover effects on non-touch devices
+    if (window.matchMedia && window.matchMedia('(hover: hover)').matches) {
+      if (isHovering) {
+        e.currentTarget.style.transform = 'translateY(-8px) scale(1.01)';
+        e.currentTarget.style.boxShadow = `0 16px 50px rgba(0, 0, 0, 0.08), 0 6px 24px ${sectionStyle.shadow}`;
+        e.currentTarget.style.borderColor = `${sectionStyle.color}20`;
+      } else {
+        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+        e.currentTarget.style.boxShadow = '0 8px 30px rgba(0, 0, 0, 0.06), 0 2px 12px rgba(0, 0, 0, 0.03)';
+        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.8)';
+      }
     }
   };
 
   const handleButtonHover = (e, isHovering) => {
-    if (isHovering) {
-      e.currentTarget.style.background = `linear-gradient(135deg, ${sectionStyle.color}16, ${sectionStyle.color}10, ${sectionStyle.color}06)`;
-      e.currentTarget.style.transform = 'translateY(-2px) scale(1.01)';
-      e.currentTarget.style.boxShadow = `0 8px 20px ${sectionStyle.color}25`;
-      e.currentTarget.style.borderColor = `${sectionStyle.color}30`;
-      const arrow = e.currentTarget.querySelector('.arrow');
-      if (arrow) arrow.style.transform = 'translateX(4px)';
-    } else {
-      e.currentTarget.style.background = `linear-gradient(135deg, ${sectionStyle.color}12, ${sectionStyle.color}08, transparent)`;
-      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-      e.currentTarget.style.boxShadow = 'none';
-      e.currentTarget.style.borderColor = `${sectionStyle.color}20`;
-      const arrow = e.currentTarget.querySelector('.arrow');
-      if (arrow) arrow.style.transform = 'translateX(0)';
+    // Only apply hover effects on non-touch devices
+    if (window.matchMedia && window.matchMedia('(hover: hover)').matches) {
+      if (isHovering) {
+        e.currentTarget.style.background = `linear-gradient(135deg, ${sectionStyle.color}16, ${sectionStyle.color}10, ${sectionStyle.color}06)`;
+        e.currentTarget.style.transform = 'translateY(-2px) scale(1.01)';
+        e.currentTarget.style.boxShadow = `0 8px 20px ${sectionStyle.color}25`;
+        e.currentTarget.style.borderColor = `${sectionStyle.color}30`;
+        const arrow = e.currentTarget.querySelector('.arrow');
+        if (arrow) arrow.style.transform = 'translateX(4px)';
+      } else {
+        e.currentTarget.style.background = `linear-gradient(135deg, ${sectionStyle.color}12, ${sectionStyle.color}08, transparent)`;
+        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.borderColor = `${sectionStyle.color}20`;
+        const arrow = e.currentTarget.querySelector('.arrow');
+        if (arrow) arrow.style.transform = 'translateX(0)';
+      }
     }
+  };
+
+  // Touch handlers for mobile feedback
+  const handleTouchStart = (e) => {
+    e.currentTarget.style.transform = 'scale(0.98)';
+    e.currentTarget.style.transition = 'transform 0.1s ease-out';
+  };
+
+  const handleTouchEnd = (e) => {
+    e.currentTarget.style.transform = 'scale(1)';
+    e.currentTarget.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
   };
 
   return (
@@ -256,40 +137,528 @@ export const SemesterCard = ({ semester }) => {
             0%, 100% { opacity: 0.4; transform: scale(1); }
             50% { opacity: 1; transform: scale(1.5); }
           }
-          @keyframes iconGlow {
-            0% { filter: drop-shadow(0 0 5px rgba(255,255,255,0.3)); }
-            100% { filter: drop-shadow(0 0 15px rgba(255,255,255,0.6)); }
+          
+          .semester-card {
+            width: 100%;
+            border-radius: 18px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.06), 0 2px 10px rgba(0, 0, 0, 0.03);
+            background-color: white;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            position: relative;
+            text-decoration: none;
+            color: inherit;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            margin: 8px;
+            min-height: 350px;
+            max-width: none;
           }
           
-          /* Mobile-specific optimizations */
-          @media (max-width: 768px) {
-            /* Ensure touch targets are large enough */
-            button {
-              min-height: 44px !important;
+          .semester-card-top {
+            height: 220px;
+            border-bottom-left-radius: 85% 45%;
+            border-bottom-right-radius: 85% 45%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            position: relative;
+            overflow: hidden;
+          }
+          
+          .semester-card-content {
+            padding: 1.2rem;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,1) 100%);
+            flex: 1;
+          }
+          
+          .semester-label {
+            font-size: 1.8rem;
+            font-weight: 800;
+            text-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            z-index: 3;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+          }
+          
+          .semester-description {
+            font-size: 0.85rem;
+            opacity: 0.95;
+            font-weight: 500;
+            z-index: 3;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            letter-spacing: 0.01em;
+          }
+          
+          .semester-button {
+            border-radius: 16px;
+            padding: 0.75rem 1.2rem;
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            outline: none;
+            width: 100%;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            min-height: 44px;
+          }
+          
+          .arrow {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 0.9rem;
+            font-weight: bold;
+          }
+          
+          .decorative-1 {
+            position: absolute;
+            top: -45px;
+            right: -45px;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            animation: float1 6s ease-in-out infinite;
+          }
+          
+          .decorative-2 {
+            position: absolute;
+            bottom: -25px;
+            left: -25px;
+            width: 60px;
+            height: 60px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 50%;
+            animation: float2 8s ease-in-out infinite;
+          }
+          
+          .decorative-3 {
+            position: absolute;
+            top: 20%;
+            left: 15%;
+            width: 3px;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 50%;
+            animation: twinkle 4s ease-in-out infinite;
+          }
+          
+          .decorative-4 {
+            position: absolute;
+            bottom: 30%;
+            right: 20%;
+            width: 2px;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: twinkle 3s ease-in-out infinite 1s;
+          }
+          
+          /* Extra Small Phones (320px - 374px) */
+          @media (max-width: 374px) {
+            .semester-card {
+              margin: 6px;
+              border-radius: 16px;
+              min-height: 320px;
+            }
+            .semester-card-top {
+              height: 180px;
+            }
+            .semester-card-content {
+              padding: 1rem;
+            }
+            .semester-label {
+              font-size: 1.5rem;
+              margin-bottom: 6px;
+            }
+            .semester-description {
+              font-size: 0.75rem;
+            }
+            .semester-button {
+              padding: 0.65rem 1rem;
+              font-size: 0.75rem;
+              border-radius: 14px;
+              min-height: 40px;
+              gap: 8px;
+            }
+            .arrow {
+              font-size: 0.85rem;
+            }
+            .decorative-1 {
+              width: 60px;
+              height: 60px;
+              top: -35px;
+              right: -35px;
+            }
+            .decorative-2 {
+              width: 45px;
+              height: 45px;
+              bottom: -20px;
+              left: -20px;
+            }
+          }
+          
+          /* Small Phones (375px - 413px) */
+          @media (min-width: 375px) and (max-width: 413px) {
+            .semester-card {
+              margin: 7px;
+              border-radius: 17px;
+              min-height: 340px;
+            }
+            .semester-card-top {
+              height: 200px;
+            }
+            .semester-card-content {
+              padding: 1.1rem;
+            }
+            .semester-label {
+              font-size: 1.6rem;
+              margin-bottom: 7px;
+            }
+            .semester-description {
+              font-size: 0.8rem;
+            }
+            .semester-button {
+              padding: 0.7rem 1.1rem;
+              font-size: 0.77rem;
+              border-radius: 15px;
+              min-height: 42px;
+              gap: 9px;
+            }
+            .arrow {
+              font-size: 0.87rem;
+            }
+          }
+          
+          /* Medium Phones (414px - 479px) */
+          @media (min-width: 414px) and (max-width: 479px) {
+            .semester-card {
+              margin: 8px;
+              border-radius: 18px;
+              min-height: 360px;
+            }
+            .semester-card-top {
+              height: 220px;
+            }
+            .semester-card-content {
+              padding: 1.2rem;
+            }
+            .semester-label {
+              font-size: 1.7rem;
+              margin-bottom: 8px;
+            }
+            .semester-description {
+              font-size: 0.82rem;
+            }
+            .semester-button {
+              padding: 0.72rem 1.15rem;
+              font-size: 0.78rem;
+              border-radius: 15px;
+              min-height: 43px;
+              gap: 9px;
+            }
+            .arrow {
+              font-size: 0.88rem;
+            }
+          }
+          
+          /* Large Phones (480px - 767px) */
+          @media (min-width: 480px) and (max-width: 767px) {
+            .semester-card {
+              margin: 10px;
+              border-radius: 20px;
+              min-height: 380px;
+            }
+            .semester-card-top {
+              height: 240px;
+            }
+            .semester-card-content {
+              padding: 1.3rem;
+            }
+            .semester-label {
+              font-size: 1.9rem;
+              margin-bottom: 9px;
+            }
+            .semester-description {
+              font-size: 0.9rem;
+            }
+            .semester-button {
+              padding: 0.8rem 1.25rem;
+              font-size: 0.82rem;
+              border-radius: 16px;
+              min-height: 46px;
+              gap: 10px;
+            }
+            .arrow {
+              font-size: 0.92rem;
+            }
+            .decorative-1 {
+              width: 90px;
+              height: 90px;
+              top: -50px;
+              right: -50px;
+            }
+            .decorative-2 {
+              width: 70px;
+              height: 70px;
+              bottom: -30px;
+              left: -30px;
+            }
+          }
+          
+          /* Tablets (768px - 1023px) */
+          @media (min-width: 768px) and (max-width: 1023px) {
+            .semester-card {
+              border-radius: 24px;
+              margin: 12px;
+              min-height: 420px;
+              width: 380px;
+              max-width: 380px;
+            }
+            .semester-card-top {
+              height: 260px;
+            }
+            .semester-card-content {
+              padding: 1.5rem;
+            }
+            .semester-label {
+              font-size: 2.2rem;
+              margin-bottom: 10px;
+            }
+            .semester-description {
+              font-size: 1rem;
+            }
+            .semester-button {
+              padding: 0.9rem 1.4rem;
+              font-size: 0.9rem;
+              border-radius: 18px;
+              min-height: 50px;
+              gap: 11px;
+            }
+            .arrow {
+              font-size: 1rem;
+            }
+            .decorative-1 {
+              width: 100px;
+              height: 100px;
+              top: -55px;
+              right: -55px;
+            }
+            .decorative-2 {
+              width: 80px;
+              height: 80px;
+              bottom: -35px;
+              left: -35px;
+            }
+            .decorative-3 {
+              width: 4px;
+              height: 4px;
+            }
+            .decorative-4 {
+              width: 3px;
+              height: 3px;
+            }
+          }
+          
+          /* Desktop (1024px - 1439px) */
+          @media (min-width: 1024px) and (max-width: 1439px) {
+            .semester-card {
+              border-radius: 28px;
+              margin: 14px;
+              min-height: 440px;
+              width: 400px;
+              max-width: 400px;
+            }
+            .semester-card-top {
+              height: 280px;
+            }
+            .semester-card-content {
+              padding: 1.6rem;
+            }
+            .semester-label {
+              font-size: 2.4rem;
+              margin-bottom: 11px;
+            }
+            .semester-description {
+              font-size: 1.1rem;
+            }
+            .semester-button {
+              padding: 1rem 1.5rem;
+              font-size: 0.95rem;
+              border-radius: 20px;
+              min-height: 52px;
+              gap: 12px;
+            }
+            .arrow {
+              font-size: 1.1rem;
+            }
+            .decorative-1 {
+              width: 110px;
+              height: 110px;
+              top: -60px;
+              right: -60px;
+            }
+            .decorative-2 {
+              width: 85px;
+              height: 85px;
+              bottom: -40px;
+              left: -40px;
+            }
+            .decorative-3 {
+              width: 5px;
+              height: 5px;
+            }
+            .decorative-4 {
+              width: 4px;
+              height: 4px;
+            }
+          }
+          
+          /* Large Desktop (1440px and up) */
+          @media (min-width: 1440px) {
+            .semester-card {
+              border-radius: 30px;
+              margin: 16px;
+              min-height: 460px;
+              width: 420px;
+              max-width: 420px;
+            }
+            .semester-card-top {
+              height: 300px;
+            }
+            .semester-card-content {
+              padding: 1.8rem;
+            }
+            .semester-label {
+              font-size: 2.6rem;
+              margin-bottom: 12px;
+            }
+            .semester-description {
+              font-size: 1.15rem;
+            }
+            .semester-button {
+              padding: 1.1rem 1.6rem;
+              font-size: 1rem;
+              border-radius: 22px;
+              min-height: 54px;
+              gap: 13px;
+            }
+            .arrow {
+              font-size: 1.15rem;
+            }
+            .decorative-1 {
+              width: 120px;
+              height: 120px;
+              top: -65px;
+              right: -65px;
+            }
+            .decorative-2 {
+              width: 90px;
+              height: 90px;
+              bottom: -45px;
+              left: -45px;
+            }
+            .decorative-3 {
+              width: 6px;
+              height: 6px;
+            }
+            .decorative-4 {
+              width: 4px;
+              height: 4px;
+            }
+          }
+          
+          /* Landscape orientation optimizations for phones */
+          @media (max-height: 500px) and (orientation: landscape) {
+            .semester-card {
+              min-height: 280px;
+            }
+            .semester-card-top {
+              height: 160px;
+            }
+            .semester-card-content {
+              padding: 0.8rem;
+            }
+            .semester-label {
+              font-size: 1.4rem;
+              margin-bottom: 6px;
+            }
+            .semester-description {
+              font-size: 0.7rem;
+            }
+            .semester-button {
+              padding: 0.6rem 1rem;
+              font-size: 0.7rem;
+              min-height: 36px;
+            }
+          }
+          
+          /* Very large screens - limit max size */
+          @media (min-width: 1920px) {
+            .semester-card {
+              width: 450px;
+              max-width: 450px;
+              min-height: 480px;
+            }
+            .semester-card-top {
+              height: 320px;
+            }
+            .semester-label {
+              font-size: 2.8rem;
+            }
+            .semester-description {
+              font-size: 1.2rem;
             }
           }
         `
       }} />
       <Link 
         to={`/semester/${semester._id}/types`}
-        style={cardStyle}
+        className="semester-card"
         onMouseEnter={(e) => handleCardHover(e, true)}
         onMouseLeave={(e) => handleCardHover(e, false)}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       >
-        <div style={curveTopStyle}>
+        <div 
+          className="semester-card-top"
+          style={{ background: sectionStyle.gradient }}
+        >
           {/* Enhanced decorative elements */}
-          <div style={decorativeElementStyle1}></div>
-          <div style={decorativeElementStyle2}></div>
-          <div style={decorativeElementStyle3}></div>
-          <div style={decorativeElementStyle4}></div>
+          <div className="decorative-1"></div>
+          <div className="decorative-2"></div>
+          <div className="decorative-3"></div>
+          <div className="decorative-4"></div>
           
-          <span style={labelStyle}>{semesterLabel}</span>
-          <span style={descriptionStyle}>Explorez les ressources</span>
+          <span className="semester-label">{semesterLabel}</span>
+          <span className="semester-description">Explorez les ressources</span>
         </div>
         
-        <div style={contentStyle}>
+        <div className="semester-card-content">
           <button
-            style={buttonStyle}
+            className="semester-button"
+            style={{
+              background: `linear-gradient(135deg, ${sectionStyle.color}12, ${sectionStyle.color}08, transparent)`,
+              border: `2px solid ${sectionStyle.color}20`,
+              color: sectionStyle.color
+            }}
             onMouseEnter={(e) => handleButtonHover(e, true)}
             onMouseLeave={(e) => handleButtonHover(e, false)}
             onClick={(e) => {
@@ -297,7 +666,7 @@ export const SemesterCard = ({ semester }) => {
             }}
           >
             Ouvrir 
-            <span className="arrow" style={arrowStyle}>→</span>
+            <span className="arrow">→</span>
           </button>
         </div>
       </Link>
