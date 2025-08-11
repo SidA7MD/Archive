@@ -170,30 +170,31 @@ export const FileCard = ({ file }) => {
   // Responsive dimensions and spacing
   const dimensions = {
     mobile: {
-      maxWidth: '100%',
-      minWidth: '280px',
-      minHeight: '300px',
+      maxWidth: 'calc(100vw - 2rem)', // Use viewport width minus padding
+      minWidth: '300px',
+      minHeight: '350px',
+      borderRadius: '28px',
+      headerHeight: '160px',
+      padding: '1.8rem 1.5rem',
+      gap: '1.4rem',
+      fontSize: {
+        title: '1.3rem',
+        size: '1.1rem',
+        button: '1.05rem'
+      }
+    },
+    tablet: {
+      maxWidth: 'min(420px, calc(50vw - 2rem))',
+      minWidth: '350px',
+      minHeight: '420px',
       borderRadius: '24px',
-      headerHeight: '140px',
+      headerHeight: '150px',
       padding: '1.5rem',
-      gap: '1.2rem',
+      gap: '1.3rem',
       fontSize: {
         title: '1.2rem',
         size: '1rem',
         button: '1rem'
-      }
-    },
-    tablet: {
-      maxWidth: '380px',
-      minHeight: '400px',
-      borderRadius: '20px',
-      headerHeight: '140px',
-      padding: '1.25rem',
-      gap: '1.25rem',
-      fontSize: {
-        title: '1.1rem',
-        size: '0.9rem',
-        button: '0.95rem'
       }
     },
     'desktop-small': {
@@ -232,23 +233,33 @@ export const FileCard = ({ file }) => {
     minWidth: currentDimensions.minWidth || 'auto',
     minHeight: currentDimensions.minHeight,
     borderRadius: currentDimensions.borderRadius,
-    boxShadow: `0 ${isMobile ? '6px 20px' : '8px 25px'} rgba(0, 0, 0, 0.12), 0 ${isMobile ? '3px 10px' : '3px 12px'} rgba(0, 0, 0, 0.08)`,
+    boxShadow: (() => {
+      if (isMobile) {
+        return `
+          0 8px 32px rgba(0, 0, 0, 0.15),
+          0 4px 16px rgba(0, 0, 0, 0.1),
+          0 2px 8px rgba(0, 0, 0, 0.08)
+        `;
+      }
+      return `0 8px 25px rgba(0, 0, 0, 0.1), 0 3px 12px rgba(0, 0, 0, 0.05)`;
+    })(),
     backgroundColor: 'white',
     overflow: 'hidden',
     display: 'flex',
     flexDirection: isDesktop ? 'row' : 'column',
     transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
     cursor: 'pointer',
-    border: '1px solid rgba(255, 255, 255, 0.9)',
+    border: `1px solid ${isMobile ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 255, 255, 0.9)'}`,
     position: 'relative',
-    backdropFilter: 'blur(12px)',
-    WebkitBackdropFilter: 'blur(12px)',
-    margin: '0 auto',
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
     // Ensure proper touch interaction on mobile
     WebkitTapHighlightColor: 'transparent',
     touchAction: 'manipulation',
-    // Better mobile spacing and full width utilization
-    marginBottom: isMobile ? '0.5rem' : '0',
+    // Mobile-specific centering and spacing
+    margin: isMobile ? '0 auto' : '0 auto',
+    // Better mobile visual presence
+    transform: isMobile ? 'translateZ(0)' : 'none', // Hardware acceleration
   };
 
   const headerStyle = {
@@ -362,14 +373,16 @@ export const FileCard = ({ file }) => {
     fontSize: currentDimensions.fontSize.size,
     color: '#718096',
     fontWeight: '600',
-    background: `linear-gradient(135deg, ${theme.color}10, ${theme.color}05)`,
-    padding: isMobile ? '0.6rem 0.8rem' : isTablet ? '0.75rem 1rem' : '1rem 1.5rem',
-    borderRadius: isMobile ? '10px' : isTablet ? '12px' : '18px',
+    background: `linear-gradient(135deg, ${theme.color}12, ${theme.color}06)`,
+    padding: isMobile ? '1rem 1.3rem' : isTablet ? '0.8rem 1.1rem' : '1rem 1.5rem',
+    borderRadius: isMobile ? '16px' : isTablet ? '12px' : '18px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '0.4rem',
-    border: `1px solid ${theme.color}15`,
+    gap: '0.6rem',
+    border: `1.5px solid ${theme.color}18`,
+    backdropFilter: 'blur(8px)',
+    WebkitBackdropFilter: 'blur(8px)',
   };
 
   const actionsStyle = {
@@ -380,28 +393,34 @@ export const FileCard = ({ file }) => {
   };
 
   const baseButtonStyle = {
-    padding: isMobile ? '1.1rem 1.5rem' : isTablet ? '0.9rem 1.2rem' : '1.2rem 1.8rem',
-    borderRadius: isMobile ? '16px' : isTablet ? '12px' : '18px',
+    padding: (() => {
+      if (isMobile) return '1.3rem 2rem';
+      if (isTablet) return '1.1rem 1.5rem';
+      return '1.2rem 1.8rem';
+    })(),
+    borderRadius: isMobile ? '18px' : isTablet ? '14px' : '18px',
     fontSize: currentDimensions.fontSize.button,
-    fontWeight: isMobile ? '700' : '700',
+    fontWeight: '700',
     cursor: 'pointer',
     transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '0.6rem',
+    gap: isMobile ? '0.8rem' : '0.6rem',
     outline: 'none',
     position: 'relative',
     overflow: 'hidden',
-    letterSpacing: '0.01em',
+    letterSpacing: '0.02em',
     border: 'none',
-    minHeight: isMobile ? '52px' : '48px', // Slightly taller on mobile for better proportion
+    minHeight: isMobile ? '56px' : '48px',
     flex: isDesktop ? 1 : 'none',
     // Mobile touch improvements
     WebkitTapHighlightColor: 'transparent',
     touchAction: 'manipulation',
     userSelect: 'none',
     fontFamily: 'inherit',
+    // Better mobile button presence
+    boxShadow: isMobile ? `0 2px 8px rgba(0, 0, 0, 0.1)` : 'none',
   };
 
   const viewButtonStyle = {
