@@ -4,7 +4,8 @@ const typeSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
-    enum: ['cours', 'tp', 'td', 'devoirs', 'compositions', 'ratrapages']
+    trim: true,
+    lowercase: true
   },
   displayName: {
     type: String,
@@ -14,7 +15,14 @@ const typeSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Semester',
     required: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
   }
-}, { timestamps: true });
+});
+
+// Ensure unique combination of name and semester
+typeSchema.index({ name: 1, semester: 1 }, { unique: true });
 
 module.exports = mongoose.model('Type', typeSchema);
