@@ -11,6 +11,9 @@ require('dotenv').config();
 
 const app = express();
 
+// FIXED: Trust proxy for Render deployment
+app.set('trust proxy', 1);
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -63,11 +66,11 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// MongoDB Atlas connection with better error handling and retry logic
+// FIXED: MongoDB Atlas connection with corrected options
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
-// FIXED: Removed bufferMaxEntries which is deprecated in Mongoose 7.x
+// FIXED: Removed deprecated options for Mongoose 7.x compatibility
 const mongooseOptions = {
   serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
   socketTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT) || 45000,
@@ -75,10 +78,9 @@ const mongooseOptions = {
   minPoolSize: 5,
   maxIdleTimeMS: 30000,
   bufferCommands: false,
-  // bufferMaxEntries: 0  <-- REMOVED: This was causing the deployment error
   connectTimeoutMS: 30000,
-  heartbeatFrequencyMS: 10000,
-  serverSelectionRetryDelay: 2000
+  heartbeatFrequencyMS: 10000
+  // REMOVED: serverSelectionRetryDelay (not supported in Mongoose 7.x)
 };
 
 console.log('🔄 Attempting to connect to MongoDB Atlas...');
@@ -91,6 +93,7 @@ let reconnectTimeout;
 let retryCount = 0;
 const maxRetries = 5;
 
+// IMPROVED: Simplified connection logic with better error handling
 const connectDB = async () => {
   if (isConnecting) return;
   isConnecting = true;
@@ -98,15 +101,21 @@ const connectDB = async () => {
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
     console.log('✅ Connected to MongoDB Atlas successfully');
-    retryCount = 0; // Reset retry count on successful connection
+    retryCount = 0;
     isConnecting = false;
   } catch (error) {
     console.error('❌ MongoDB Atlas connection error:', error.message);
+    
+    // Log specific error details for debugging
+    if (error.message.includes('serverselectionretrydelay')) {
+      console.error('⚠️  Detected deprecated Mongoose option. This has been fixed in the updated code.');
+    }
+    
     isConnecting = false;
     retryCount++;
     
     if (retryCount <= maxRetries) {
-      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Exponential backoff, max 30s
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
       console.log(`🔄 Retrying connection in ${delay/1000} seconds... (attempt ${retryCount}/${maxRetries})`);
       reconnectTimeout = setTimeout(connectDB, delay);
     } else {
@@ -154,10 +163,9 @@ const File = require('./models/File');
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'university-archive/pdfs', // Folder in Cloudinary
-    format: async (req, file) => 'pdf', // supports promises as well
+    folder: 'university-archive/pdfs',
+    format: async (req, file) => 'pdf',
     public_id: (req, file) => {
-      // Generate unique filename
       const sanitizedName = file.originalname
         .replace(/[^a-zA-Z0-9.\-_]/g, '_')
         .replace('.pdf', '')
@@ -165,7 +173,7 @@ const storage = new CloudinaryStorage({
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       return `${uniqueSuffix}-${sanitizedName}`;
     },
-    resource_type: 'raw', // Use 'raw' for non-image files like PDFs
+    resource_type: 'raw',
     allowed_formats: ['pdf'],
   },
 });
@@ -780,7 +788,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint with Cloudinary status
+// IMPROVED: Health check endpoint with better error handling
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -792,11 +800,13 @@ app.get('/api/health', async (req, res) => {
 
   // Test Cloudinary connection
   let cloudinaryStatus = 'Unknown';
+  let cloudinaryError = null;
   try {
     await cloudinary.api.ping();
     cloudinaryStatus = 'Connected';
   } catch (error) {
     cloudinaryStatus = 'Disconnected';
+    cloudinaryError = error.message;
   }
 
   const overallStatus = (dbStatus === 1 && cloudinaryStatus === 'Connected') ? 'OK' : 'Warning';
@@ -808,11 +818,13 @@ app.get('/api/health', async (req, res) => {
       database: {
         status: dbStatusMap[dbStatus] || 'Unknown',
         host: process.env.MONGO_HOST,
-        name: process.env.MONGO_DB_NAME
+        name: process.env.MONGO_DB_NAME,
+        ...(dbStatus !== 1 && { error: 'Database connection issue' })
       },
       cloudinary: {
         status: cloudinaryStatus,
-        cloud_name: process.env.CLOUDINARY_CLOUD_NAME
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        ...(cloudinaryError && { error: cloudinaryError })
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -933,6 +945,8 @@ app.listen(PORT, async () => {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}`);
   console.log(`☁️  File Storage: Cloudinary (${process.env.CLOUDINARY_CLOUD_NAME})`);
+  console.log(`🛡️  Security: Helmet + Rate Limiting enabled`);
+  console.log(`🔄 Proxy Trust: Enabled for deployment platforms`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
