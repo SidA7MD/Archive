@@ -5,13 +5,13 @@ const multer = require('multer');
 const path = require('path');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const helmet = require('helmet'); // Security middleware
-const rateLimit = require('express-rate-limit'); // Rate limiting
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const app = express();
 
-// FIXED: Trust proxy for Render deployment
+// FIXED: Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
 // Configure Cloudinary
@@ -31,52 +31,90 @@ cloudinary.api.ping()
   .then(() => console.log('✅ Cloudinary connection successful'))
   .catch(err => console.error('❌ Cloudinary connection failed:', err.message));
 
-// Security middleware
+// Enhanced Security middleware
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false, // Allow embedding of Cloudinary content
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:", "*.cloudinary.com"],
+      connectSrc: ["'self'", "https:", "*.cloudinary.com"],
+      fontSrc: ["'self'", "https:", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'", "https:", "*.cloudinary.com"],
+      frameSrc: ["'self'", "*.cloudinary.com"],
+    },
+  },
 }));
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(limiter);
+app.use('/api', limiter);
 
-// Upload rate limiting - more restrictive
+// Upload rate limiting
 const uploadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 uploads per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 10,
   message: 'Too many upload attempts, please try again later.',
 });
 
-// CORS configuration
+// Enhanced CORS configuration for production
 const corsOptions = {
-  origin: [
-    'https://larchive.tech',
-    'https://www.larchive.tech',
-    'http://localhost:3000',
-    'http://localhost:5173'
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'https://larchive.tech',
+      'https://www.larchive.tech',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:3001',
+      // Add your frontend deployment URLs here
+      /\.vercel\.app$/,
+      /\.netlify\.app$/,
+      /\.herokuapp\.com$/,
+      /\.render\.com$/,
+    ];
+    
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (typeof allowedOrigin === 'string') {
+        return origin === allowedOrigin;
+      }
+      return allowedOrigin.test(origin);
+    });
+    
+    if (isAllowed) {
+      return callback(null, true);
+    }
+    
+    console.warn('CORS blocked origin:', origin);
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Content-Disposition'] // Important for PDF viewing
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Disposition'],
+  maxAge: 86400 // 24 hours
 };
-
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// FIXED: MongoDB Atlas connection with corrected options
+// MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
-// FIXED: Removed deprecated options for Mongoose 7.x compatibility
 const mongooseOptions = {
   serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
   socketTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT) || 45000,
@@ -86,7 +124,6 @@ const mongooseOptions = {
   bufferCommands: false,
   connectTimeoutMS: 30000,
   heartbeatFrequencyMS: 10000
-  // REMOVED: serverSelectionRetryDelay (not supported in Mongoose 7.x)
 };
 
 console.log('🔄 Attempting to connect to MongoDB Atlas...');
@@ -99,7 +136,6 @@ let reconnectTimeout;
 let retryCount = 0;
 const maxRetries = 5;
 
-// IMPROVED: Simplified connection logic with better error handling
 const connectDB = async () => {
   if (isConnecting) return;
   isConnecting = true;
@@ -111,12 +147,6 @@ const connectDB = async () => {
     isConnecting = false;
   } catch (error) {
     console.error('❌ MongoDB Atlas connection error:', error.message);
-    
-    // Log specific error details for debugging
-    if (error.message.includes('serverselectionretrydelay')) {
-      console.error('⚠️  Detected deprecated Mongoose option. This has been fixed in the updated code.');
-    }
-    
     isConnecting = false;
     retryCount++;
     
@@ -224,7 +254,6 @@ const validateUploadData = (req, res, next) => {
     });
   }
 
-  // Validate year is a number
   if (isNaN(parseInt(year))) {
     return res.status(400).json({
       error: 'Year must be a valid number'
@@ -234,7 +263,7 @@ const validateUploadData = (req, res, next) => {
   next();
 };
 
-// Routes with enhanced error handling
+// Enhanced Routes
 
 // GET /api/semesters - List all semesters
 app.get('/api/semesters', requireDB, async (req, res) => {
@@ -346,7 +375,69 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload a PDF file to Cloudinary
+// GET /api/files - Enhanced endpoint for direct file access (for the FileCard component)
+app.get('/api/files', requireDB, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+    
+    // Build filter
+    const filter = {};
+    if (req.query.semester) filter.semester = req.query.semester;
+    if (req.query.type) filter.type = req.query.type;
+    if (req.query.subject) filter.subject = req.query.subject;
+    if (req.query.year) filter.year = req.query.year;
+    if (req.query.search) {
+      filter.originalName = { $regex: req.query.search, $options: 'i' };
+    }
+
+    const [files, total] = await Promise.all([
+      File.find(filter)
+        .populate(['semester', 'type', 'subject', 'year'])
+        .sort({ uploadedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      File.countDocuments(filter)
+    ]);
+
+    // Ensure Cloudinary URLs are HTTPS and accessible
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      // Ensure we always have HTTPS URLs
+      cloudinaryUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
+      filePath: file.filePath?.replace('http://', 'https://'),
+      // Add direct access URLs for the FileCard component
+      viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
+      downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
+      storageProvider: 'cloudinary',
+      // Add file type for better icon selection
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
+
+    res.json({
+      files: enhancedFiles,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      },
+      total
+    });
+  } catch (error) {
+    console.error('Error fetching files:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch files',
+      message: error.message 
+    });
+  }
+});
+
+// POST /api/upload - Upload PDF to Cloudinary with enhanced error handling
 app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -362,119 +453,122 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
+    const session = await mongoose.startSession();
+    
     try {
       const { semester, type, subject, year } = req.body;
       
       console.log('📤 File uploaded to Cloudinary:', {
         filename: req.file.filename,
         public_id: req.file.public_id,
-        url: req.file.path,
+        url: req.file.secure_url,
         size: req.file.size
       });
 
-      // Use MongoDB session for transaction
-      const session = await mongoose.startSession();
-      
-      try {
-        await session.withTransaction(async () => {
-          // Find or create semester
-          let semesterDoc = await Semester.findOne({ name: semester }).session(session);
-          if (!semesterDoc) {
-            throw new Error('Invalid semester');
-          }
+      await session.withTransaction(async () => {
+        // Find or create semester
+        let semesterDoc = await Semester.findOne({ name: semester }).session(session);
+        if (!semesterDoc) {
+          throw new Error('Invalid semester');
+        }
 
-          // Find or create type
-          let typeDoc = await Type.findOne({ 
-            name: type, 
-            semester: semesterDoc._id 
-          }).session(session);
+        // Find or create type
+        let typeDoc = await Type.findOne({ 
+          name: type, 
+          semester: semesterDoc._id 
+        }).session(session);
+        
+        if (!typeDoc) {
+          const typeDisplayNames = {
+            'cours': 'Cours',
+            'tp': 'Travaux Pratiques',
+            'td': 'Travaux Dirigés',
+            'devoirs': 'Devoirs',
+            'compositions': 'Compositions',
+            'ratrapages': 'Rattrapages'
+          };
           
-          if (!typeDoc) {
-            const typeDisplayNames = {
-              'cours': 'Cours',
-              'tp': 'Travaux Pratiques',
-              'td': 'Travaux Dirigés',
-              'devoirs': 'Devoirs',
-              'compositions': 'Compositions',
-              'ratrapages': 'Rattrapages'
-            };
-            
-            typeDoc = new Type({
-              name: type,
-              displayName: typeDisplayNames[type] || type,
-              semester: semesterDoc._id
-            });
-            await typeDoc.save({ session });
-          }
+          typeDoc = new Type({
+            name: type,
+            displayName: typeDisplayNames[type] || type,
+            semester: semesterDoc._id
+          });
+          await typeDoc.save({ session });
+        }
 
-          // Find or create subject
-          let subjectDoc = await Subject.findOne({
+        // Find or create subject
+        let subjectDoc = await Subject.findOne({
+          name: subject,
+          semester: semesterDoc._id,
+          type: typeDoc._id
+        }).session(session);
+        
+        if (!subjectDoc) {
+          subjectDoc = new Subject({
             name: subject,
             semester: semesterDoc._id,
             type: typeDoc._id
-          }).session(session);
-          
-          if (!subjectDoc) {
-            subjectDoc = new Subject({
-              name: subject,
-              semester: semesterDoc._id,
-              type: typeDoc._id
-            });
-            await subjectDoc.save({ session });
-          }
+          });
+          await subjectDoc.save({ session });
+        }
 
-          // Find or create year
-          let yearDoc = await Year.findOne({
+        // Find or create year
+        let yearDoc = await Year.findOne({
+          year: parseInt(year),
+          semester: semesterDoc._id,
+          type: typeDoc._id,
+          subject: subjectDoc._id
+        }).session(session);
+        
+        if (!yearDoc) {
+          yearDoc = new Year({
             year: parseInt(year),
             semester: semesterDoc._id,
             type: typeDoc._id,
             subject: subjectDoc._id
-          }).session(session);
-          
-          if (!yearDoc) {
-            yearDoc = new Year({
-              year: parseInt(year),
-              semester: semesterDoc._id,
-              type: typeDoc._id,
-              subject: subjectDoc._id
-            });
-            await yearDoc.save({ session });
+          });
+          await yearDoc.save({ session });
+        }
+
+        // Create file record with enhanced Cloudinary data
+        const fileDoc = new File({
+          originalName: req.file.originalname,
+          fileName: req.file.filename,
+          filePath: req.file.secure_url, // Always use HTTPS
+          cloudinaryPublicId: req.file.public_id,
+          cloudinaryUrl: req.file.secure_url, // Always use HTTPS
+          fileSize: req.file.size,
+          mimeType: req.file.mimetype,
+          semester: semesterDoc._id,
+          type: typeDoc._id,
+          subject: subjectDoc._id,
+          year: yearDoc._id,
+          storageProvider: 'cloudinary',
+          uploadedAt: new Date(),
+          // Add metadata for better file management
+          metadata: {
+            width: req.file.width || null,
+            height: req.file.height || null,
+            format: req.file.format || 'pdf',
+            resourceType: req.file.resource_type || 'raw'
           }
-
-          // Create file record with Cloudinary data
-          const fileDoc = new File({
-  originalName: req.file.originalname,
-  fileName: req.file.filename,
-  filePath: req.file.secure_url, // Use secure_url instead of path for HTTPS
-  cloudinaryPublicId: req.file.public_id,
-  cloudinaryUrl: req.file.secure_url, // Use secure_url here too
-  fileSize: req.file.size,
-  mimeType: req.file.mimetype,
-  semester: semesterDoc._id,
-  type: typeDoc._id,
-  subject: subjectDoc._id,
-  year: yearDoc._id,
-  storageProvider: 'cloudinary', // Add this field for clarity
-  urlExpiry: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // Optional: Set URL expiry (1 week)
-});
-
-await fileDoc.save({ session });
-
-// Construct the public URL that will be used for viewing
-const publicViewUrl = req.file.secure_url.replace('/upload/', '/upload/fl_attachment/');
-
-res.status(201).json({ 
-  message: 'File uploaded successfully to Cloudinary',
-  file: {
-    ...fileDoc.toObject(),
-    viewUrl: req.file.secure_url, // Direct URL for viewing
-    downloadUrl: publicViewUrl    // URL for downloading
-  }
-});
         });
-      } finally {
-        await session.endSession();
-      }
+
+        await fileDoc.save({ session });
+
+        // Populate the saved document for response
+        await fileDoc.populate(['semester', 'type', 'subject', 'year']);
+
+        res.status(201).json({ 
+          message: 'File uploaded successfully to Cloudinary',
+          file: {
+            ...fileDoc.toObject(),
+            viewUrl: req.file.secure_url,
+            downloadUrl: req.file.secure_url.replace('/upload/', '/upload/fl_attachment/'),
+            fileType: req.file.originalname.split('.').pop()?.toLowerCase() || 'pdf'
+          }
+        });
+      });
     } catch (error) {
       console.error('Error uploading file:', error);
       
@@ -492,11 +586,13 @@ res.status(201).json({
         error: 'Failed to upload file',
         message: error.message 
       });
+    } finally {
+      await session.endSession();
     }
   });
 });
 
-// GET /api/files/:fileId/download - Redirect to Cloudinary URL for download
+// GET /api/files/:fileId/download - Enhanced download with better error handling
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -508,13 +604,27 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // For Cloudinary files, we can force download by adding fl_attachment parameter
+    // Verify file exists in Cloudinary before redirecting
+    if (file.cloudinaryPublicId) {
+      try {
+        await cloudinary.api.resource(file.cloudinaryPublicId, { resource_type: 'raw' });
+      } catch (cloudinaryError) {
+        if (cloudinaryError.http_code === 404) {
+          return res.status(404).json({ 
+            error: 'File no longer exists in storage',
+            message: 'This file may have been deleted'
+          });
+        }
+        throw cloudinaryError;
+      }
+    }
+
+    // Force download with attachment flag
     const downloadUrl = file.cloudinaryUrl || file.filePath;
     const downloadUrlWithAttachment = downloadUrl.includes('cloudinary.com') 
-      ? downloadUrl.replace('/upload/', '/upload/fl_attachment/')
-      : downloadUrl;
+      ? downloadUrl.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/')
+      : downloadUrl.replace('http://', 'https://');
 
-    // Redirect to Cloudinary download URL
     res.redirect(downloadUrlWithAttachment);
   } catch (error) {
     console.error('Error getting download link:', error);
@@ -525,7 +635,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - Redirect to Cloudinary URL for viewing
+// GET /api/files/:fileId/view - Enhanced view with better error handling
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -537,8 +647,23 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Redirect to Cloudinary URL for viewing
-    const viewUrl = file.cloudinaryUrl || file.filePath;
+    // Verify file exists in Cloudinary
+    if (file.cloudinaryPublicId) {
+      try {
+        await cloudinary.api.resource(file.cloudinaryPublicId, { resource_type: 'raw' });
+      } catch (cloudinaryError) {
+        if (cloudinaryError.http_code === 404) {
+          return res.status(404).json({ 
+            error: 'File no longer exists in storage',
+            message: 'This file may have been deleted'
+          });
+        }
+        throw cloudinaryError;
+      }
+    }
+
+    // Redirect to HTTPS Cloudinary URL for viewing
+    const viewUrl = (file.cloudinaryUrl || file.filePath).replace('http://', 'https://');
     res.redirect(viewUrl);
   } catch (error) {
     console.error('Error getting view link:', error);
@@ -549,11 +674,11 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   }
 });
 
-// Enhanced admin routes with better pagination and filtering
+// Enhanced admin routes
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100 per page
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
     
     // Build filter object
@@ -562,6 +687,9 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
     if (req.query.type) filter.type = req.query.type;
     if (req.query.subject) filter.subject = req.query.subject;
     if (req.query.year) filter.year = req.query.year;
+    if (req.query.search) {
+      filter.originalName = { $regex: req.query.search, $options: 'i' };
+    }
 
     const [files, total] = await Promise.all([
       File.find(filter)
@@ -573,13 +701,25 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       File.countDocuments(filter)
     ]);
 
+    // Enhance files with direct URLs
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      cloudinaryUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
+      filePath: file.filePath?.replace('http://', 'https://'),
+      viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
+      downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
+
     res.json({
-      files,
+      files: enhancedFiles,
       pagination: {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
   } catch (error) {
@@ -605,79 +745,95 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Find or validate semester
-    let semesterDoc = await Semester.findOne({ name: semester });
-    if (!semesterDoc) {
-      return res.status(400).json({ error: 'Invalid semester' });
-    }
+    const session = await mongoose.startSession();
+    
+    try {
+      await session.withTransaction(async () => {
+        // Find or validate semester
+        let semesterDoc = await Semester.findOne({ name: semester }).session(session);
+        if (!semesterDoc) {
+          throw new Error('Invalid semester');
+        }
 
-    // Find or create type
-    let typeDoc = await Type.findOne({ name: type, semester: semesterDoc._id });
-    if (!typeDoc) {
-      const typeDisplayNames = {
-        'cours': 'Cours',
-        'tp': 'Travaux Pratiques',
-        'td': 'Travaux Dirigés',
-        'devoirs': 'Devoirs',
-        'compositions': 'Compositions',
-        'ratrapages': 'Rattrapages'
-      };
-      
-      typeDoc = new Type({
-        name: type,
-        displayName: typeDisplayNames[type] || type,
-        semester: semesterDoc._id
+        // Find or create type
+        let typeDoc = await Type.findOne({ name: type, semester: semesterDoc._id }).session(session);
+        if (!typeDoc) {
+          const typeDisplayNames = {
+            'cours': 'Cours',
+            'tp': 'Travaux Pratiques',
+            'td': 'Travaux Dirigés',
+            'devoirs': 'Devoirs',
+            'compositions': 'Compositions',
+            'ratrapages': 'Rattrapages'
+          };
+          
+          typeDoc = new Type({
+            name: type,
+            displayName: typeDisplayNames[type] || type,
+            semester: semesterDoc._id
+          });
+          await typeDoc.save({ session });
+        }
+
+        // Find or create subject
+        let subjectDoc = await Subject.findOne({
+          name: subject,
+          semester: semesterDoc._id,
+          type: typeDoc._id
+        }).session(session);
+        if (!subjectDoc) {
+          subjectDoc = new Subject({
+            name: subject,
+            semester: semesterDoc._id,
+            type: typeDoc._id
+          });
+          await subjectDoc.save({ session });
+        }
+
+        // Find or create year
+        let yearDoc = await Year.findOne({
+          year: parseInt(year),
+          semester: semesterDoc._id,
+          type: typeDoc._id,
+          subject: subjectDoc._id
+        }).session(session);
+        if (!yearDoc) {
+          yearDoc = new Year({
+            year: parseInt(year),
+            semester: semesterDoc._id,
+            type: typeDoc._id,
+            subject: subjectDoc._id
+          });
+          await yearDoc.save({ session });
+        }
+
+        // Update file metadata
+        const updatedFile = await File.findByIdAndUpdate(
+          req.params.fileId,
+          {
+            originalName,
+            semester: semesterDoc._id,
+            type: typeDoc._id,
+            subject: subjectDoc._id,
+            year: yearDoc._id,
+            updatedAt: new Date()
+          },
+          { new: true, session }
+        ).populate(['semester', 'type', 'subject', 'year']);
+
+        res.json({ 
+          message: 'File updated successfully', 
+          file: {
+            ...updatedFile.toObject(),
+            viewUrl: updatedFile.cloudinaryUrl?.replace('http://', 'https://'),
+            downloadUrl: updatedFile.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
+            fileType: updatedFile.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+          }
+        });
       });
-      await typeDoc.save();
+    } finally {
+      await session.endSession();
     }
-
-    // Find or create subject
-    let subjectDoc = await Subject.findOne({
-      name: subject,
-      semester: semesterDoc._id,
-      type: typeDoc._id
-    });
-    if (!subjectDoc) {
-      subjectDoc = new Subject({
-        name: subject,
-        semester: semesterDoc._id,
-        type: typeDoc._id
-      });
-      await subjectDoc.save();
-    }
-
-    // Find or create year
-    let yearDoc = await Year.findOne({
-      year: parseInt(year),
-      semester: semesterDoc._id,
-      type: typeDoc._id,
-      subject: subjectDoc._id
-    });
-    if (!yearDoc) {
-      yearDoc = new Year({
-        year: parseInt(year),
-        semester: semesterDoc._id,
-        type: typeDoc._id,
-        subject: subjectDoc._id
-      });
-      await yearDoc.save();
-    }
-
-    // Update file metadata
-    const updatedFile = await File.findByIdAndUpdate(
-      req.params.fileId,
-      {
-        originalName,
-        semester: semesterDoc._id,
-        type: typeDoc._id,
-        subject: subjectDoc._id,
-        year: yearDoc._id,
-        updatedAt: new Date()
-      },
-      { new: true }
-    ).populate(['semester', 'type', 'subject', 'year']);
-
-    res.json({ message: 'File updated successfully', file: updatedFile });
   } catch (error) {
     console.error('Error updating file:', error);
     res.status(500).json({ 
@@ -687,7 +843,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// DELETE /api/files/:fileId - Delete a file from both database and Cloudinary
+// DELETE /api/files/:fileId - Delete file from both database and Cloudinary
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -699,22 +855,29 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete from Cloudinary
-    try {
-      if (file.cloudinaryPublicId) {
+    // Delete from Cloudinary first
+    let cloudinaryDeleted = false;
+    if (file.cloudinaryPublicId) {
+      try {
         const result = await cloudinary.uploader.destroy(file.cloudinaryPublicId, { 
           resource_type: 'raw' 
         });
         console.log('🗑️  Deleted from Cloudinary:', file.cloudinaryPublicId, result);
+        cloudinaryDeleted = result.result === 'ok';
+      } catch (cloudinaryError) {
+        console.warn('Warning: Could not delete file from Cloudinary:', cloudinaryError.message);
+        // Continue with database deletion even if Cloudinary deletion fails
       }
-    } catch (cloudinaryError) {
-      console.warn('Warning: Could not delete file from Cloudinary:', cloudinaryError.message);
     }
 
     // Delete the file record from database
     await File.findByIdAndDelete(req.params.fileId);
 
-    res.json({ message: 'File deleted successfully' });
+    res.json({ 
+      message: 'File deleted successfully',
+      cloudinaryDeleted,
+      databaseDeleted: true
+    });
   } catch (error) {
     console.error('Error deleting file:', error);
     res.status(500).json({ 
@@ -734,7 +897,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       totalSizeResult,
       filesByType,
       filesBySemester,
-      recentUploads
+      recentUploads,
+      storageStats
     ] = await Promise.all([
       File.countDocuments(),
       Semester.countDocuments(),
@@ -755,7 +919,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         {
           $group: {
             _id: '$typeInfo.displayName',
-            count: { $sum: 1 }
+            count: { $sum: 1 },
+            totalSize: { $sum: '$fileSize' }
           }
         },
         { $sort: { count: -1 } }
@@ -773,7 +938,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         {
           $group: {
             _id: '$semesterInfo.displayName',
-            count: { $sum: 1 }
+            count: { $sum: 1 },
+            totalSize: { $sum: '$fileSize' }
           }
         },
         { $sort: { '_id': 1 } }
@@ -781,19 +947,60 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       File.find()
         .populate(['semester', 'type', 'subject'])
         .sort({ uploadedAt: -1 })
-        .limit(5)
-        .lean()
+        .limit(10)
+        .lean(),
+      File.aggregate([
+        {
+          $group: {
+            _id: '$storageProvider',
+            count: { $sum: 1 },
+            totalSize: { $sum: '$fileSize' }
+          }
+        }
+      ])
     ]);
 
+    // Format file sizes
+    const formatFileSize = (bytes) => {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
     res.json({
-      totalFiles,
-      totalSemesters,
-      totalSubjects,
-      totalSize: totalSizeResult[0]?.totalSize || 0,
-      filesByType,
-      filesBySemester,
-      recentUploads,
-      storageProvider: 'Cloudinary'
+      overview: {
+        totalFiles,
+        totalSemesters,
+        totalSubjects,
+        totalSize: totalSizeResult[0]?.totalSize || 0,
+        totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0)
+      },
+      filesByType: filesByType.map(item => ({
+        ...item,
+        totalSizeFormatted: formatFileSize(item.totalSize)
+      })),
+      filesBySemester: filesBySemester.map(item => ({
+        ...item,
+        totalSizeFormatted: formatFileSize(item.totalSize)
+      })),
+      recentUploads: recentUploads.map(file => ({
+        ...file,
+        viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
+        downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
+        fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
+        fileSizeFormatted: formatFileSize(file.fileSize || 0)
+      })),
+      storageStats: storageStats.map(stat => ({
+        ...stat,
+        totalSizeFormatted: formatFileSize(stat.totalSize)
+      })),
+      storageProvider: 'Cloudinary',
+      cloudConfig: {
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        folder: 'university-archive/pdfs'
+      }
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);
@@ -804,7 +1011,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// IMPROVED: Health check endpoint with better error handling
+// Health check endpoint with comprehensive status
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -817,37 +1024,144 @@ app.get('/api/health', async (req, res) => {
   // Test Cloudinary connection
   let cloudinaryStatus = 'Unknown';
   let cloudinaryError = null;
+  let cloudinaryDetails = {};
+  
   try {
-    await cloudinary.api.ping();
+    const pingResult = await cloudinary.api.ping();
     cloudinaryStatus = 'Connected';
+    cloudinaryDetails = {
+      status: pingResult.status,
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME
+    };
   } catch (error) {
     cloudinaryStatus = 'Disconnected';
     cloudinaryError = error.message;
   }
 
+  // Check file count for basic functionality
+  let fileCount = 0;
+  let dbError = null;
+  
+  if (dbStatus === 1) {
+    try {
+      fileCount = await File.countDocuments();
+    } catch (error) {
+      dbError = error.message;
+    }
+  }
+
   const overallStatus = (dbStatus === 1 && cloudinaryStatus === 'Connected') ? 'OK' : 'Warning';
 
-  res.json({ 
+  res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
-    message: 'Server is running',
+    message: `Server is ${overallStatus === 'OK' ? 'healthy' : 'experiencing issues'}`,
+    timestamp: new Date().toISOString(),
     services: {
       database: {
         status: dbStatusMap[dbStatus] || 'Unknown',
         host: process.env.MONGO_HOST,
         name: process.env.MONGO_DB_NAME,
+        fileCount: dbStatus === 1 ? fileCount : null,
+        ...(dbError && { error: dbError }),
         ...(dbStatus !== 1 && { error: 'Database connection issue' })
       },
       cloudinary: {
         status: cloudinaryStatus,
-        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        ...cloudinaryDetails,
         ...(cloudinaryError && { error: cloudinaryError })
+      },
+      storage: {
+        provider: 'Cloudinary',
+        folder: 'university-archive/pdfs',
+        status: cloudinaryStatus
       }
     },
     environment: process.env.NODE_ENV || 'development',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '1.0.0'
+    uptime: Math.floor(process.uptime()),
+    uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
+    version: process.env.npm_package_version || '1.0.0',
+    nodeVersion: process.version
   });
+});
+
+// Bulk operations for admin
+app.post('/api/admin/files/bulk-delete', requireDB, async (req, res) => {
+  try {
+    const { fileIds } = req.body;
+    
+    if (!Array.isArray(fileIds) || fileIds.length === 0) {
+      return res.status(400).json({ error: 'No file IDs provided' });
+    }
+
+    // Validate all IDs
+    const invalidIds = fileIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({ 
+        error: 'Invalid file IDs',
+        invalidIds 
+      });
+    }
+
+    // Find all files to be deleted
+    const files = await File.find({ _id: { $in: fileIds } });
+    
+    if (files.length === 0) {
+      return res.status(404).json({ error: 'No files found' });
+    }
+
+    let cloudinaryDeleted = 0;
+    let cloudinaryFailed = 0;
+    const failedDeletions = [];
+
+    // Delete from Cloudinary
+    for (const file of files) {
+      if (file.cloudinaryPublicId) {
+        try {
+          const result = await cloudinary.uploader.destroy(file.cloudinaryPublicId, { 
+            resource_type: 'raw' 
+          });
+          if (result.result === 'ok') {
+            cloudinaryDeleted++;
+          } else {
+            cloudinaryFailed++;
+            failedDeletions.push({
+              fileId: file._id,
+              fileName: file.originalName,
+              error: 'Cloudinary deletion failed'
+            });
+          }
+        } catch (error) {
+          cloudinaryFailed++;
+          failedDeletions.push({
+            fileId: file._id,
+            fileName: file.originalName,
+            error: error.message
+          });
+        }
+      }
+    }
+
+    // Delete from database
+    const deleteResult = await File.deleteMany({ _id: { $in: fileIds } });
+
+    res.json({
+      message: 'Bulk deletion completed',
+      summary: {
+        requested: fileIds.length,
+        found: files.length,
+        deletedFromDatabase: deleteResult.deletedCount,
+        deletedFromCloudinary: cloudinaryDeleted,
+        cloudinaryFailed,
+        failedDeletions
+      }
+    });
+  } catch (error) {
+    console.error('Error in bulk delete:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete files',
+      message: error.message 
+    });
+  }
 });
 
 // Initialize default semesters
@@ -868,42 +1182,121 @@ async function initializeSemesters() {
         console.log(`✅ Created semester: ${sem.displayName}`);
       }
     }
+    console.log('📚 Semesters initialization completed');
   } catch (error) {
     console.error('❌ Error initializing semesters:', error);
   }
 }
 
-// Cleanup function for orphaned file records (Cloudinary cleanup)
+// Enhanced cleanup function for orphaned file records
 async function cleanupOrphanedFiles() {
   try {
+    console.log('🧹 Starting cleanup of orphaned files...');
+    
     const files = await File.find({}).lean();
     let cleaned = 0;
+    let checked = 0;
+    
+    console.log(`📋 Found ${files.length} files to verify`);
     
     for (const file of files) {
-      // For Cloudinary files, we can check if the public_id exists
+      checked++;
+      
+      // For Cloudinary files, check if they exist
       if (file.cloudinaryPublicId) {
         try {
-          await cloudinary.api.resource(file.cloudinaryPublicId, { resource_type: 'raw' });
+          await cloudinary.api.resource(file.cloudinaryPublicId, { 
+            resource_type: 'raw' 
+          });
+          
+          // File exists, optionally log progress
+          if (checked % 100 === 0) {
+            console.log(`✓ Verified ${checked}/${files.length} files...`);
+          }
         } catch (error) {
           if (error.http_code === 404) {
             // File doesn't exist in Cloudinary, remove from database
             await File.findByIdAndDelete(file._id);
             cleaned++;
-            console.log(`🗑️  Cleaned orphaned file record: ${file.originalName}`);
+            console.log(`🗑️  Cleaned orphaned file record: ${file.originalName} (${file.cloudinaryPublicId})`);
+          } else {
+            console.warn(`⚠️  Error checking file ${file.originalName}:`, error.message);
           }
+        }
+      } else {
+        // File without Cloudinary ID - might be legacy, check if URL is accessible
+        if (file.filePath && !file.filePath.includes('cloudinary.com')) {
+          console.log(`🔍 Found legacy file without Cloudinary ID: ${file.originalName}`);
+          // Optionally mark for manual review or migration
         }
       }
     }
     
     if (cleaned > 0) {
-      console.log(`✅ Cleaned ${cleaned} orphaned file records`);
+      console.log(`✅ Cleanup completed: ${cleaned} orphaned file records removed`);
+    } else {
+      console.log('✅ No orphaned files found');
     }
+    
+    return { checked, cleaned };
   } catch (error) {
     console.error('❌ Error during cleanup:', error);
+    return { checked: 0, cleaned: 0, error: error.message };
   }
 }
 
-// Graceful shutdown
+// Cloudinary webhook handler (optional, for advanced file management)
+app.post('/api/webhooks/cloudinary', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    // Verify webhook signature if configured
+    // const signature = req.headers['x-cld-signature'];
+    // const timestamp = req.headers['x-cld-timestamp'];
+    
+    const event = JSON.parse(req.body.toString());
+    
+    console.log('📡 Cloudinary webhook received:', event.notification_type);
+    
+    // Handle different webhook events
+    switch (event.notification_type) {
+      case 'upload':
+        console.log('📤 File uploaded to Cloudinary:', event.public_id);
+        break;
+        
+      case 'delete':
+        console.log('🗑️  File deleted from Cloudinary:', event.public_id);
+        // Optionally remove from database if not already done
+        const deletedFile = await File.findOneAndDelete({ 
+          cloudinaryPublicId: event.public_id 
+        });
+        if (deletedFile) {
+          console.log('🗑️  Corresponding database record removed');
+        }
+        break;
+        
+      case 'rename':
+        console.log('✏️  File renamed in Cloudinary:', {
+          from: event.public_id,
+          to: event.to_public_id
+        });
+        // Update database record
+        await File.findOneAndUpdate(
+          { cloudinaryPublicId: event.public_id },
+          { cloudinaryPublicId: event.to_public_id }
+        );
+        break;
+        
+      default:
+        console.log('📡 Unhandled webhook event:', event.notification_type);
+    }
+    
+    res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('❌ Webhook error:', error);
+    res.status(400).json({ error: 'Webhook processing failed' });
+  }
+});
+
+// Graceful shutdown handler
 const gracefulShutdown = async (signal) => {
   console.log(`\n📡 Received ${signal}, shutting down gracefully...`);
   
@@ -929,7 +1322,14 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Enhanced error handling middleware
 app.use((error, req, res, next) => {
-  console.error('💥 Unhandled error:', error);
+  console.error('💥 Unhandled error:', {
+    message: error.message,
+    stack: error.stack,
+    url: req.url,
+    method: req.method,
+    ip: req.ip,
+    timestamp: new Date().toISOString()
+  });
   
   // Don't leak error details in production
   const message = process.env.NODE_ENV === 'production' 
@@ -939,44 +1339,77 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({ 
     error: 'Internal server error',
     message: message,
+    timestamp: new Date().toISOString(),
     ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
   });
 });
 
 // Enhanced 404 handler
 app.use('*', (req, res) => {
+  console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
+  
   res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
     method: req.method,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    availableEndpoints: [
+      'GET /api/health',
+      'GET /api/files',
+      'GET /api/semesters',
+      'POST /api/upload',
+      'GET /api/files/:id/view',
+      'GET /api/files/:id/download'
+    ]
   });
 });
 
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n☁️  University Archive Server (Cloudinary Edition)`);
+  console.log(`\n☁️  University Archive Server (Enhanced Cloudinary Edition)`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base URL: http://localhost:${PORT}`);
+  console.log(`🔗 API Base URL: ${process.env.NODE_ENV === 'production' ? 'https://archive-mi73.onrender.com' : `http://localhost:${PORT}`}`);
   console.log(`☁️  File Storage: Cloudinary (${process.env.CLOUDINARY_CLOUD_NAME})`);
   console.log(`🛡️  Security: Helmet + Rate Limiting enabled`);
   console.log(`🔄 Proxy Trust: Enabled for deployment platforms`);
+  console.log(`🌐 CORS: Enhanced with dynamic origin validation`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
     if (mongoose.connection.readyState === 1) {
       clearInterval(waitForDB);
       
-      await initializeSemesters();
-      console.log('✅ Default semesters initialized');
+      console.log('🔧 Initializing application...');
       
-      // Run cleanup on startup
-      await cleanupOrphanedFiles();
+      await initializeSemesters();
+      
+      // Run cleanup on startup (but don't wait for it)
+      cleanupOrphanedFiles()
+        .then(result => {
+          if (result.error) {
+            console.log('⚠️  Cleanup completed with errors:', result.error);
+          } else {
+            console.log(`✅ Startup cleanup: ${result.checked} files checked, ${result.cleaned} orphaned records removed`);
+          }
+        })
+        .catch(error => {
+          console.error('❌ Startup cleanup failed:', error.message);
+        });
       
       console.log('🎯 Server ready to accept connections');
       console.log('📤 Files will be uploaded to Cloudinary cloud storage');
+      console.log('📊 Admin panel: /api/admin/stats');
+      console.log('🔍 Health check: /api/health');
+      
+      // Log environment-specific info
+      if (process.env.NODE_ENV === 'production') {
+        console.log('🚀 Running in PRODUCTION mode');
+      } else {
+        console.log('🛠️  Running in DEVELOPMENT mode');
+        console.log(`📝 API Documentation available at http://localhost:${PORT}/api/health`);
+      }
     }
   }, 1000);
   
@@ -984,7 +1417,7 @@ app.listen(PORT, async () => {
   setTimeout(() => {
     clearInterval(waitForDB);
     if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️  Started without database connection');
+      console.log('⚠️  Started without database connection - some features may be limited');
     }
   }, 30000);
 });
