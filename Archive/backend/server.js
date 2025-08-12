@@ -61,14 +61,13 @@ const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     
-     const allowedOrigins = [
+   const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:3001',
   'https://www.larchive.tech',
   'https://larchive.tech',
-  'https://archive-h7evw65o2-sidi110s-projects.vercel.app', // Add this line
-  // Add your frontend deployment URLs here
+  'https://archive-h7evw65o2-sidi110s-projects.vercel.app', // Your Vercel frontend
   /\.vercel\.app$/,
   /\.netlify\.app$/,
   /\.herokuapp\.com$/,
