@@ -4,16 +4,37 @@ const semesterSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
-    enum: ['S1', 'S2', 'S3', 'S4', 'S5'] // Fixed 5 semesters
+    unique: true,
+    trim: true
   },
   displayName: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
   order: {
     type: Number,
-    required: true
+    required: true,
+    unique: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
-}, { timestamps: true });
+});
+
+// Update the updatedAt field before saving
+semesterSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
 
 module.exports = mongoose.model('Semester', semesterSchema);
