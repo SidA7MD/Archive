@@ -47,6 +47,27 @@ const fileThemes = [
   }
 ];
 
+// API Configuration - supports multiple environments
+const API_CONFIG = {
+  // Try to detect the API base URL from environment or current location
+  getBaseURL: () => {
+    // Check if we're in development (localhost)
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return 'http://localhost:5000'; // Local development server
+    }
+    
+    // For production, use the current origin or a configured API URL
+    // You can set this via environment variables in your build process
+    return process.env.REACT_APP_API_URL || window.location.origin;
+  },
+  
+  // Get full API URL with path
+  getURL: (path) => {
+    const baseURL = API_CONFIG.getBaseURL();
+    return `${baseURL}${path.startsWith('/') ? path : '/' + path}`;
+  }
+};
+
 // Enhanced responsive breakpoints hook
 const useBreakpoints = () => {
   const [breakpoint, setBreakpoint] = useState('desktop');
@@ -74,7 +95,6 @@ const useBreakpoints = () => {
 const getFileIcon = (fileName, breakpoint) => {
   const extension = fileName.toLowerCase().split('.').pop();
   
-  // Responsive icon sizes - more compact on mobile
   const iconSizes = {
     'mobile-small': 36,
     'mobile': 40,
@@ -146,14 +166,23 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-export const FileCard = ({ file }) => {
+// Enhanced FileCard with dynamic API integration
+export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
   const fileIcon = getFileIcon(file.originalName || 'file.txt', breakpoint);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
   const isTablet = breakpoint === 'tablet';
   const isDesktop = ['desktop-small', 'desktop'].includes(breakpoint);
+
+  // Get the API base URL - use prop, then fallback to auto-detection
+  const getApiUrl = (endpoint) => {
+    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
+    return `${baseUrl}${endpoint}`;
+  };
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -163,15 +192,92 @@ export const FileCard = ({ file }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const handleView = () => {
-    window.open(`https://archive-mi73.onrender.com/api/files/${file._id}/view`, '_blank');
+  // Enhanced view handler with error handling
+  const handleView = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Check if the file has a direct Cloudinary URL
+      if (file.cloudinaryUrl) {
+        window.open(file.cloudinaryUrl, '_blank');
+        return;
+      }
+      
+      // Fallback to API endpoint
+      const viewUrl = getApiUrl(`/api/files/${file._id}/view`);
+      
+      // Test if the endpoint is accessible
+      const response = await fetch(viewUrl, { method: 'HEAD' });
+      
+      if (response.ok) {
+        window.open(viewUrl, '_blank');
+      } else {
+        // If API is not accessible, try direct Cloudinary URL from file path
+        if (file.filePath && file.filePath.includes('cloudinary.com')) {
+          window.open(file.filePath, '_blank');
+        } else {
+          throw new Error('File not accessible');
+        }
+      }
+    } catch (err) {
+      console.error('Error viewing file:', err);
+      setError('Unable to view file');
+      
+      // Last resort: try opening the file path directly
+      if (file.filePath) {
+        window.open(file.filePath, '_blank');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleDownload = () => {
-    window.location.href = `https://archive-mi73.onrender.com/api/files/${file._id}/download`;
+  // Enhanced download handler with error handling
+  const handleDownload = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Check if the file has a direct Cloudinary download URL
+      if (file.cloudinaryUrl) {
+        // Add Cloudinary download flag
+        const downloadUrl = file.cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/');
+        window.location.href = downloadUrl;
+        return;
+      }
+      
+      // Fallback to API endpoint
+      const downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
+      
+      // Test if the endpoint is accessible
+      const response = await fetch(downloadUrl, { method: 'HEAD' });
+      
+      if (response.ok) {
+        window.location.href = downloadUrl;
+      } else {
+        // If API is not accessible, try direct Cloudinary download URL
+        if (file.filePath && file.filePath.includes('cloudinary.com')) {
+          const directDownloadUrl = file.filePath.replace('/upload/', '/upload/fl_attachment/');
+          window.location.href = directDownloadUrl;
+        } else {
+          throw new Error('File not accessible');
+        }
+      }
+    } catch (err) {
+      console.error('Error downloading file:', err);
+      setError('Unable to download file');
+      
+      // Last resort: try downloading the file path directly
+      if (file.filePath) {
+        window.location.href = file.filePath;
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Enhanced responsive dimensions - optimized for mobile with compact design
+  // Enhanced responsive dimensions
   const dimensions = {
     'mobile-small': {
       width: 'calc(100vw - 2.5rem)',
@@ -295,8 +401,7 @@ export const FileCard = ({ file }) => {
     WebkitTapHighlightColor: 'transparent',
     touchAction: 'manipulation',
     margin: '0 auto',
-    transform: 'translateZ(0)', // Hardware acceleration
-    // Enhanced mobile presence
+    transform: 'translateZ(0)',
     ...(isMobile && {
       background: 'linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,1) 100%)',
       borderWidth: '1.5px',
@@ -316,14 +421,12 @@ export const FileCard = ({ file }) => {
     color: 'white',
     position: 'relative',
     overflow: 'hidden',
-    // Enhanced mobile gradient
     ...(isMobile && {
       background: `${theme.gradient}, radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2) 0%, transparent 50%)`,
       backgroundBlendMode: 'overlay, normal',
     }),
   };
 
-  // Enhanced responsive decorative elements
   const getDecorativeSize = (baseSize) => {
     const multipliers = {
       'mobile-small': 0.7,
@@ -378,7 +481,6 @@ export const FileCard = ({ file }) => {
         borderRadius: '50%',
         animation: 'twinkle 4s ease-in-out infinite 2s',
       }}></div>
-      {/* Additional mobile-specific decorative element */}
       {isMobile && (
         <div style={{
           position: 'absolute',
@@ -399,7 +501,6 @@ export const FileCard = ({ file }) => {
     animation: 'iconGlow 3s ease-in-out infinite alternate',
     zIndex: 2,
     marginBottom: isMobile ? '0.5rem' : '0.5rem',
-    // Enhanced mobile icon presence
     ...(isMobile && {
       transform: 'scale(1.05)',
       filter: 'drop-shadow(0 8px 20px rgba(0, 0, 0, 0.25)) drop-shadow(0 0 0 rgba(255,255,255,0.1))',
@@ -434,7 +535,6 @@ export const FileCard = ({ file }) => {
     display: '-webkit-box',
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
-    // Enhanced mobile typography
     ...(isMobile && {
       fontWeight: '800',
       textShadow: '0 1px 2px rgba(0,0,0,0.02)',
@@ -457,7 +557,6 @@ export const FileCard = ({ file }) => {
     backdropFilter: 'blur(12px)',
     WebkitBackdropFilter: 'blur(12px)',
     boxShadow: isMobile ? `0 4px 12px rgba(0,0,0,0.06)` : 'none',
-    // Enhanced mobile size indicator
     ...(isMobile && {
       fontWeight: '700',
       background: `linear-gradient(135deg, ${theme.color}18, ${theme.color}12, ${theme.color}06)`,
@@ -497,7 +596,8 @@ export const FileCard = ({ file }) => {
     touchAction: 'manipulation',
     userSelect: 'none',
     fontFamily: 'inherit',
-    // Enhanced mobile button presence
+    disabled: loading,
+    opacity: loading ? 0.7 : 1,
     ...(isMobile && {
       boxShadow: `0 3px 10px rgba(0, 0, 0, 0.08)`,
       fontWeight: '700',
@@ -519,7 +619,6 @@ export const FileCard = ({ file }) => {
     background: theme.gradient,
     color: 'white',
     boxShadow: `0 6px 20px ${theme.shadow}`,
-    // Enhanced mobile download button
     ...(isMobile && {
       background: `${theme.gradient}, linear-gradient(45deg, rgba(255,255,255,0.1) 0%, transparent 100%)`,
       backgroundBlendMode: 'normal, overlay',
@@ -527,7 +626,18 @@ export const FileCard = ({ file }) => {
     }),
   };
 
-  // Enhanced hover and touch interactions
+  // Error display
+  const errorStyle = {
+    fontSize: '0.85rem',
+    color: '#e53e3e',
+    textAlign: 'center',
+    padding: '0.5rem',
+    background: 'rgba(254, 178, 178, 0.2)',
+    borderRadius: '8px',
+    marginBottom: '0.5rem',
+  };
+
+  // Enhanced interaction handlers
   const handleContainerHover = (e, isHovering) => {
     if (isDesktop && !('ontouchstart' in window)) {
       if (isHovering) {
@@ -543,7 +653,7 @@ export const FileCard = ({ file }) => {
   };
 
   const handleButtonHover = (e, isHovering, buttonType) => {
-    if (!('ontouchstart' in window)) {
+    if (!loading && !('ontouchstart' in window)) {
       if (isHovering) {
         if (buttonType === 'view') {
           e.currentTarget.style.background = `linear-gradient(135deg, ${theme.color}30, ${theme.color}25, ${theme.color}20)`;
@@ -571,16 +681,15 @@ export const FileCard = ({ file }) => {
     }
   };
 
-  // Enhanced mobile touch feedback
   const handleTouchStart = (e) => {
-    if ('ontouchstart' in window) {
+    if ('ontouchstart' in window && !loading) {
       e.currentTarget.style.transform = 'scale(0.97)';
       e.currentTarget.style.opacity = '0.85';
     }
   };
 
   const handleTouchEnd = (e) => {
-    if ('ontouchstart' in window) {
+    if ('ontouchstart' in window && !loading) {
       setTimeout(() => {
         e.currentTarget.style.transform = 'scale(1)';
         e.currentTarget.style.opacity = '1';
@@ -588,7 +697,6 @@ export const FileCard = ({ file }) => {
     }
   };
 
-  // Enhanced animation styles
   const animationStyles = `
     @keyframes float1 {
       0%, 100% { transform: translateY(0px) rotate(0deg); }
@@ -650,29 +758,37 @@ export const FileCard = ({ file }) => {
             {formatFileSize(file.fileSize || 0)}
           </div>
 
+          {error && (
+            <div style={errorStyle}>
+              {error}
+            </div>
+          )}
+
           <div style={actionsStyle}>
             <button
               style={viewButtonStyle}
               onClick={handleView}
+              disabled={loading}
               onMouseEnter={(e) => handleButtonHover(e, true, 'view')}
               onMouseLeave={(e) => handleButtonHover(e, false, 'view')}
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
             >
               <Eye size={isMobile ? 16 : 20} />
-              Visualiser
+              {loading ? 'Chargement...' : 'Visualiser'}
             </button>
             
             <button
               style={downloadButtonStyle}
               onClick={handleDownload}
+              disabled={loading}
               onMouseEnter={(e) => handleButtonHover(e, true, 'download')}
               onMouseLeave={(e) => handleButtonHover(e, false, 'download')}
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
             >
               <Download size={isMobile ? 16 : 20} />
-              Télécharger
+              {loading ? 'Chargement...' : 'Télécharger'}
             </button>
           </div>
         </div>
@@ -681,12 +797,11 @@ export const FileCard = ({ file }) => {
   );
 };
 
-// Enhanced Files Page Component with perfect mobile centering
-export const FilesPage = ({ files = [], loading = false, error = null, onRetry }) => {
+// Enhanced Files Page Component with API integration
+export const FilesPage = ({ files = [], loading = false, error = null, onRetry, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
   
-  // Enhanced responsive container styles
   const containerStyle = {
     display: 'flex',
     flexDirection: 'column',
@@ -712,7 +827,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     background: isMobile 
       ? 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)'
       : 'transparent',
-    // Perfect mobile centering
     ...(isMobile && {
       paddingTop: '2rem',
       paddingBottom: '3rem',
@@ -722,7 +836,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     }),
   };
 
-  // Enhanced grid layout for larger screens
   const gridContainerStyle = {
     display: 'grid',
     gridTemplateColumns: (() => {
@@ -760,7 +873,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     fontWeight: '600',
     textAlign: 'center',
     padding: '2rem',
-    // Mobile loading enhancement
     ...(isMobile && {
       color: 'rgba(255,255,255,0.95)',
       textShadow: '0 2px 4px rgba(0,0,0,0.2)',
@@ -778,7 +890,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     fontWeight: '600',
     textAlign: 'center',
     padding: '2rem',
-    // Mobile error enhancement
     ...(isMobile && {
       color: 'rgba(255,255,255,0.95)',
       textShadow: '0 2px 4px rgba(0,0,0,0.2)',
@@ -799,7 +910,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     minHeight: isMobile ? '56px' : '44px',
     touchAction: 'manipulation',
     WebkitTapHighlightColor: 'transparent',
-    // Enhanced mobile button
     ...(isMobile && {
       boxShadow: '0 4px 15px rgba(0,0,0,0.15)',
       backdropFilter: 'blur(10px)',
@@ -829,7 +939,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     fontWeight: '600',
     textAlign: 'center',
     padding: '2rem',
-    // Mobile empty state enhancement
     ...(isMobile && {
       textShadow: '0 2px 4px rgba(0,0,0,0.2)',
     }),
@@ -906,12 +1015,11 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     );
   }
 
-  // Mobile layout uses flex column, larger screens use grid
   if (isMobile) {
     return (
       <div style={containerStyle}>
         {files.map(file => (
-          <FileCard key={file._id} file={file} />
+          <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
         ))}
       </div>
     );
@@ -921,70 +1029,82 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry }
     <div style={{...containerStyle, alignItems: 'stretch'}}>
       <div style={gridContainerStyle}>
         {files.map(file => (
-          <FileCard key={file._id} file={file} />
+          <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
         ))}
       </div>
     </div>
   );
 };
 
-// Enhanced demo component with more diverse files
-const ResponsiveFileDemo = () => {
+// Enhanced demo component with cloud server integration
+const CloudServerFileDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const sampleFiles = [
+  // Cloud server sample files with Cloudinary URLs
+  const sampleCloudFiles = [
     {
-      _id: '1',
-      originalName: 'Annual_Report_2024.pdf',
+      _id: '674a1b2c3d4e5f6789012345',
+      originalName: 'Cours_Algorithmes_2024.pdf',
+      fileName: '1734567890123-Cours_Algorithmes_2024',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567890123-Cours_Algorithmes_2024',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
       fileSize: 2048576,
+      mimeType: 'application/pdf',
+      storageProvider: 'cloudinary'
     },
     {
-      _id: '2',
-      originalName: 'Marketing_Presentation_Q4.pptx',
+      _id: '674a1b2c3d4e5f6789012346',
+      originalName: 'TP_Base_de_Donnees.pdf',
+      fileName: '1734567891234-TP_Base_de_Donnees',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567891234-TP_Base_de_Donnees',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
+      fileSize: 1572864,
+      mimeType: 'application/pdf',
+      storageProvider: 'cloudinary'
+    },
+    {
+      _id: '674a1b2c3d4e5f6789012347',
+      originalName: 'Examen_Final_Mathematiques.pdf',
+      fileName: '1734567892345-Examen_Final_Mathematiques',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567892345-Examen_Final_Mathematiques',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
+      fileSize: 3145728,
+      mimeType: 'application/pdf',
+      storageProvider: 'cloudinary'
+    },
+    {
+      _id: '674a1b2c3d4e5f6789012348',
+      originalName: 'TD_Analyse_Numerique.pdf',
+      fileName: '1734567893456-TD_Analyse_Numerique',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567893456-TD_Analyse_Numerique',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
+      fileSize: 987654,
+      mimeType: 'application/pdf',
+      storageProvider: 'cloudinary'
+    },
+    {
+      _id: '674a1b2c3d4e5f6789012349',
+      originalName: 'Projet_Fin_Etude_Guide.pdf',
+      fileName: '1734567894567-Projet_Fin_Etude_Guide',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
       fileSize: 5242880,
-    },
-    {
-      _id: '3',
-      originalName: 'Project_Assets_Archive.zip',
-      fileSize: 15728640,
-    },
-    {
-      _id: '4',
-      originalName: 'Background_Music_Track.mp3',
-      fileSize: 4194304,
-    },
-    {
-      _id: '5',
-      originalName: 'React_Component_Library.js',
-      fileSize: 1048576,
-    },
-    {
-      _id: '6',
-      originalName: 'Sales_Data_Analytics.xlsx',
-      fileSize: 512000,
-    },
-    {
-      _id: '7',
-      originalName: 'Product_Demo_Video.mp4',
-      fileSize: 25165824,
-    },
-    {
-      _id: '8',
-      originalName: 'Company_Logo_Vector.svg',
-      fileSize: 128000,
-    },
-    {
-      _id: '9',
-      originalName: 'Database_Backup_March.sql',
-      fileSize: 8388608,
+      mimeType: 'application/pdf',
+      storageProvider: 'cloudinary'
     }
   ];
 
-  // Simulate loading
+  // Simulate loading from cloud server
   useEffect(() => {
     const timer = setTimeout(() => {
-      setCurrentFiles(sampleFiles);
+      setCurrentFiles(sampleCloudFiles);
       setLoading(false);
     }, 2000);
 
@@ -993,29 +1113,42 @@ const ResponsiveFileDemo = () => {
 
   const handleRetry = () => {
     setLoading(true);
+    setError(null);
     setCurrentFiles([]);
+    
+    // Simulate retry with potential error
     setTimeout(() => {
-      setCurrentFiles(sampleFiles);
-      setLoading(false);
+      const success = Math.random() > 0.3; // 70% success rate
+      
+      if (success) {
+        setCurrentFiles(sampleCloudFiles);
+        setLoading(false);
+      } else {
+        setError('Impossible de se connecter au serveur cloud. Vérifiez votre connexion internet.');
+        setLoading(false);
+      }
     }, 1500);
   };
+
+  // API Configuration - You should set this to your actual server URL
+  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://your-server-url.com';
 
   return (
     <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)',
-      // Enhanced mobile background
       backgroundAttachment: 'fixed',
       backgroundSize: 'cover',
     }}>
       <FilesPage 
         files={currentFiles} 
         loading={loading} 
-        error={null}
+        error={error}
         onRetry={handleRetry}
+        apiBaseUrl={apiBaseUrl}
       />
     </div>
   );
 };
 
-export default ResponsiveFileDemo;
+export default CloudServerFileDemo;
