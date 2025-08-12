@@ -55,11 +55,15 @@ const uploadLimiter = rateLimit({
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' 
-    ? process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
-    : ['http://localhost:3000', 'http://localhost:3001'],
+  origin: [
+    'https://larchive.tech',
+    'https://www.larchive.tech',
+    'http://localhost:3000',
+    'http://localhost:5173' // Vite default
+  ],
   credentials: true,
-  optionsSuccessStatus: 200
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 };
 
 app.use(cors(corsOptions));
