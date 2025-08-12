@@ -7,6 +7,7 @@ import { SubjectsPage } from './pages/SubjectsPage';
 import { YearsPage } from './pages/YearsPage';
 import { FilesPage } from './pages/FilesPage';
 import { AdminPage } from './pages/AdminPage';
+import ProductionDebug from './ProductionDebug'; 
 import './App.css';
 import './index.css';
 
@@ -15,6 +16,10 @@ function App() {
     <Router>
       <div className="App">
         <Navbar />
+        // Adjust path
+
+// Add this somewhere in your app (temporarily)
+<ProductionDebug />
         <main className="main-content">
           <div className="page-wrapper">
             <Routes>
