@@ -48,15 +48,12 @@ const fileThemes = [
   }
 ];
 
-// API Configuration - Updated for local storage
+// API Configuration - supports multiple environments
 const API_CONFIG = {
   getBaseURL: () => {
-    // For development
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:5000';
     }
-    
-    // For production - use environment variable or current origin
     return process.env.REACT_APP_API_URL || window.location.origin;
   },
   
@@ -164,7 +161,7 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// Enhanced FileCard with local storage support
+// Enhanced FileCard with dynamic API integration
 export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
@@ -190,84 +187,73 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Updated view handler for local storage
+  // Enhanced view handler with error handling
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Priority order for viewing files:
-      // 1. Use direct file path if it's a full URL (for backward compatibility)
-      // 2. Use API view endpoint for local files
-      // 3. Fallback to viewUrl if provided
-      
-      let viewUrl;
-      
-      if (file.viewUrl && (file.viewUrl.startsWith('http') || file.viewUrl.startsWith('/uploads'))) {
-        // Direct URL to file (local storage)
-        viewUrl = file.viewUrl.startsWith('http') ? file.viewUrl : getApiUrl(file.viewUrl);
-      } else if (file.filePath && file.filePath.startsWith('/uploads')) {
-        // Relative path to uploaded file
-        viewUrl = getApiUrl(file.filePath);
-      } else if (file._id) {
-        // Use API view endpoint
-        viewUrl = getApiUrl(`/api/files/${file._id}/view`);
-      } else {
-        throw new Error('No valid file path found');
+      if (file.cloudinaryUrl) {
+        window.open(file.cloudinaryUrl, '_blank');
+        return;
       }
-
-      console.log('Opening file at:', viewUrl);
       
-      // For PDFs, open in new tab to use browser's PDF viewer
-      window.open(viewUrl, '_blank');
+      const viewUrl = getApiUrl(`/api/files/${file._id}/view`);
+      const response = await fetch(viewUrl, { method: 'HEAD' });
       
+      if (response.ok) {
+        window.open(viewUrl, '_blank');
+      } else {
+        if (file.filePath && file.filePath.includes('cloudinary.com')) {
+          window.open(file.filePath, '_blank');
+        } else {
+          throw new Error('File not accessible');
+        }
+      }
     } catch (err) {
       console.error('Error viewing file:', err);
-      setError('Impossible de visualiser le fichier');
+      setError('Unable to view file');
+      
+      if (file.filePath) {
+        window.open(file.filePath, '_blank');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Updated download handler for local storage
+  // Enhanced download handler with error handling
   const handleDownload = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Priority order for downloading files:
-      // 1. Use API download endpoint (handles proper headers)
-      // 2. Use direct downloadUrl if provided
-      // 3. Fallback to direct file path
-      
-      let downloadUrl;
-      
-      if (file._id) {
-        // Use API download endpoint (recommended - handles proper headers)
-        downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
-      } else if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
-        // Direct download URL
-        downloadUrl = file.downloadUrl;
-      } else if (file.filePath) {
-        // Direct file path
-        downloadUrl = file.filePath.startsWith('http') ? file.filePath : getApiUrl(file.filePath);
-      } else {
-        throw new Error('No valid download path found');
+      if (file.cloudinaryUrl) {
+        const downloadUrl = file.cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/');
+        window.location.href = downloadUrl;
+        return;
       }
-
-      console.log('Downloading file from:', downloadUrl);
       
-      // Create a temporary link for download
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = file.originalName || 'document.pdf';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
+      const response = await fetch(downloadUrl, { method: 'HEAD' });
       
+      if (response.ok) {
+        window.location.href = downloadUrl;
+      } else {
+        if (file.filePath && file.filePath.includes('cloudinary.com')) {
+          const directDownloadUrl = file.filePath.replace('/upload/', '/upload/fl_attachment/');
+          window.location.href = directDownloadUrl;
+        } else {
+          throw new Error('File not accessible');
+        }
+      }
     } catch (err) {
       console.error('Error downloading file:', err);
-      setError('Impossible de télécharger le fichier');
+      setError('Unable to download file');
+      
+      if (file.filePath) {
+        window.location.href = file.filePath;
+      }
     } finally {
       setLoading(false);
     }
@@ -365,16 +351,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           {formatFileSize(file.fileSize || 0)}
         </div>
 
-        {/* Add file info for debugging in development */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className={styles.debugInfo}>
-            <small>
-              Storage: {file.storageProvider || 'local'} | 
-              Path: {file.filePath || 'N/A'}
-            </small>
-          </div>
-        )}
-
         {error && (
           <div className={styles.error}>
             {error}
@@ -405,7 +381,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   );
 };
 
-// Enhanced Files Page Component with local storage support
+// Enhanced Files Page Component with API integration
 export const FilesPage = ({ files = [], loading = false, error = null, onRetry, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
@@ -483,82 +459,77 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   );
 };
 
-// Updated demo component with local storage files
-const LocalStorageFileDemo = () => {
+// Enhanced demo component with cloud server integration
+const CloudServerFileDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Local storage sample files (as they would come from your API)
-  const sampleLocalFiles = [
+  // Cloud server sample files with Cloudinary URLs
+  const sampleCloudFiles = [
     {
       _id: '674a1b2c3d4e5f6789012345',
       originalName: 'Cours_Algorithmes_2024.pdf',
-      fileName: '1734567890123-Cours_Algorithmes_2024.pdf',
-      filePath: '/uploads/1734567890123-Cours_Algorithmes_2024.pdf',
+      fileName: '1734567890123-Cours_Algorithmes_2024',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567890123-Cours_Algorithmes_2024',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
       fileSize: 2048576,
       mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-15T10:30:00.000Z',
-      viewUrl: '/uploads/1734567890123-Cours_Algorithmes_2024.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012345/download'
+      storageProvider: 'cloudinary'
     },
     {
       _id: '674a1b2c3d4e5f6789012346',
       originalName: 'TP_Base_de_Donnees.pdf',
-      fileName: '1734567891234-TP_Base_de_Donnees.pdf',
-      filePath: '/uploads/1734567891234-TP_Base_de_Donnees.pdf',
+      fileName: '1734567891234-TP_Base_de_Donnees',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567891234-TP_Base_de_Donnees',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
       fileSize: 1572864,
       mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-16T14:20:00.000Z',
-      viewUrl: '/uploads/1734567891234-TP_Base_de_Donnees.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012346/download'
+      storageProvider: 'cloudinary'
     },
     {
       _id: '674a1b2c3d4e5f6789012347',
       originalName: 'Examen_Final_Mathematiques.pdf',
-      fileName: '1734567892345-Examen_Final_Mathematiques.pdf',
-      filePath: '/uploads/1734567892345-Examen_Final_Mathematiques.pdf',
+      fileName: '1734567892345-Examen_Final_Mathematiques',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567892345-Examen_Final_Mathematiques',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
       fileSize: 3145728,
       mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-17T09:15:00.000Z',
-      viewUrl: '/uploads/1734567892345-Examen_Final_Mathematiques.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012347/download'
+      storageProvider: 'cloudinary'
     },
     {
       _id: '674a1b2c3d4e5f6789012348',
       originalName: 'TD_Analyse_Numerique.pdf',
-      fileName: '1734567893456-TD_Analyse_Numerique.pdf',
-      filePath: '/uploads/1734567893456-TD_Analyse_Numerique.pdf',
+      fileName: '1734567893456-TD_Analyse_Numerique',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567893456-TD_Analyse_Numerique',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
       fileSize: 987654,
       mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-18T16:45:00.000Z',
-      viewUrl: '/uploads/1734567893456-TD_Analyse_Numerique.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012348/download'
+      storageProvider: 'cloudinary'
     },
     {
       _id: '674a1b2c3d4e5f6789012349',
       originalName: 'Projet_Fin_Etude_Guide.pdf',
-      fileName: '1734567894567-Projet_Fin_Etude_Guide.pdf',
-      filePath: '/uploads/1734567894567-Projet_Fin_Etude_Guide.pdf',
+      fileName: '1734567894567-Projet_Fin_Etude_Guide',
+      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
+      cloudinaryPublicId: 'university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide',
+      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
       fileSize: 5242880,
       mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-19T11:30:00.000Z',
-      viewUrl: '/uploads/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012349/download'
+      storageProvider: 'cloudinary'
     }
   ];
 
-  // Simulate loading from local storage server
+  // Simulate loading from cloud server
   useEffect(() => {
     const timer = setTimeout(() => {
-      setCurrentFiles(sampleLocalFiles);
+      setCurrentFiles(sampleCloudFiles);
       setLoading(false);
-    }, 1500);
+    }, 2000);
 
     return () => clearTimeout(timer);
   }, []);
@@ -568,29 +539,25 @@ const LocalStorageFileDemo = () => {
     setError(null);
     setCurrentFiles([]);
     
-    // Simulate retry
+    // Simulate retry with potential error
     setTimeout(() => {
-      const success = Math.random() > 0.2; // 80% success rate
+      const success = Math.random() > 0.3; // 70% success rate
       
       if (success) {
-        setCurrentFiles(sampleLocalFiles);
+        setCurrentFiles(sampleCloudFiles);
         setLoading(false);
       } else {
-        setError('Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+        setError('Impossible de se connecter au serveur cloud. Vérifiez votre connexion internet.');
         setLoading(false);
       }
     }, 1500);
   };
 
-  // API Configuration - Set this to your actual server URL
-  const apiBaseUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+  // API Configuration - You should set this to your actual server URL
+  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://archive-mi73.onrender.com';
 
   return (
     <div className={styles.demoContainer}>
-      <div className={styles.demoHeader}>
-        <h2>📚 Archive Universitaire - Stockage Local</h2>
-        <p>Système de gestion de fichiers avec stockage local sécurisé</p>
-      </div>
       <FilesPage 
         files={currentFiles} 
         loading={loading} 
@@ -602,4 +569,4 @@ const LocalStorageFileDemo = () => {
   );
 };
 
-export default LocalStorageFileDemo;
+export default CloudServerFileDemo;
