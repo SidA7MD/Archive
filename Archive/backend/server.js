@@ -3,49 +3,38 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const fs = require('fs');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const app = express();
 
-// FIXED: Trust proxy for deployment platforms
+// Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('📁 Created uploads directory');
+}
 
-console.log('☁️  Cloudinary configured:', {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY ? '***configured***' : 'missing'
-});
-
-// Test Cloudinary connection
-cloudinary.api.ping()
-  .then(() => console.log('✅ Cloudinary connection successful'))
-  .catch(err => console.error('❌ Cloudinary connection failed:', err.message));
-
-// Enhanced Security middleware
+// Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginEmbedderPolicy: false, // Allow embedding of Cloudinary content
+  crossOriginEmbedderPolicy: false,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:", "*.cloudinary.com"],
-      connectSrc: ["'self'", "https:", "*.cloudinary.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https:"],
       fontSrc: ["'self'", "https:", "data:"],
       objectSrc: ["'none'"],
-      mediaSrc: ["'self'", "https:", "*.cloudinary.com"],
-      frameSrc: ["'self'", "*.cloudinary.com"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'self'"],
     },
   },
 }));
@@ -67,15 +56,12 @@ const uploadLimiter = rateLimit({
   message: 'Too many upload attempts, please try again later.',
 });
 
-// Enhanced CORS configuration for production
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
     const allowedOrigins = [
-      'https://larchive.tech',
-      'https://www.larchive.tech',
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:3001',
@@ -111,13 +97,16 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
 const mongooseOptions = {
-  serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
-  socketTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT) || 45000,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
   maxPoolSize: 10,
   minPoolSize: 5,
   maxIdleTimeMS: 30000,
@@ -126,10 +115,7 @@ const mongooseOptions = {
   heartbeatFrequencyMS: 10000
 };
 
-console.log('🔄 Attempting to connect to MongoDB Atlas...');
-console.log('Host:', process.env.MONGO_HOST);
-console.log('Database:', process.env.MONGO_DB_NAME);
-console.log('Username:', process.env.MONGO_USERNAME);
+console.log('🔄 Attempting to connect to MongoDB...');
 
 let isConnecting = false;
 let reconnectTimeout;
@@ -142,11 +128,11 @@ const connectDB = async () => {
   
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
-    console.log('✅ Connected to MongoDB Atlas successfully');
+    console.log('✅ Connected to MongoDB successfully');
     retryCount = 0;
     isConnecting = false;
   } catch (error) {
-    console.error('❌ MongoDB Atlas connection error:', error.message);
+    console.error('❌ MongoDB connection error:', error.message);
     isConnecting = false;
     retryCount++;
     
@@ -165,7 +151,7 @@ connectDB();
 
 // Connection event listeners
 mongoose.connection.on('connected', () => {
-  console.log('✅ Mongoose connected to MongoDB Atlas');
+  console.log('✅ Mongoose connected to MongoDB');
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
@@ -177,15 +163,11 @@ mongoose.connection.on('error', (err) => {
 });
 
 mongoose.connection.on('disconnected', () => {
-  console.log('⚠️  Mongoose disconnected from MongoDB Atlas');
+  console.log('⚠️  Mongoose disconnected from MongoDB');
   if (!isConnecting && !reconnectTimeout && retryCount < maxRetries) {
     console.log('🔄 Attempting to reconnect...');
     reconnectTimeout = setTimeout(connectDB, 5000);
   }
-});
-
-mongoose.connection.on('reconnected', () => {
-  console.log('✅ Mongoose reconnected to MongoDB Atlas');
 });
 
 // Models
@@ -195,26 +177,22 @@ const Subject = require('./models/Subject');
 const Year = require('./models/Year');
 const File = require('./models/File');
 
-// Configure Cloudinary Storage for Multer
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'university-archive/pdfs',
-    format: async (req, file) => 'pdf',
-    public_id: (req, file) => {
-      const sanitizedName = file.originalname
-        .replace(/[^a-zA-Z0-9.\-_]/g, '_')
-        .replace('.pdf', '')
-        .substring(0, 50);
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      return `${uniqueSuffix}-${sanitizedName}`;
-    },
-    resource_type: 'raw',
-    allowed_formats: ['pdf'],
+// Configure local file storage for Multer
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsDir);
   },
+  filename: function (req, file, cb) {
+    const sanitizedName = file.originalname
+      .replace(/[^a-zA-Z0-9.\-_]/g, '_')
+      .replace('.pdf', '')
+      .substring(0, 50);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, `${uniqueSuffix}-${sanitizedName}.pdf`);
+  }
 });
 
-// Enhanced file filter
+// File filter
 const fileFilter = (req, file, cb) => {
   if (file.mimetype === 'application/pdf') {
     cb(null, true);
@@ -263,7 +241,7 @@ const validateUploadData = (req, res, next) => {
   next();
 };
 
-// Enhanced Routes
+// Routes
 
 // GET /api/semesters - List all semesters
 app.get('/api/semesters', requireDB, async (req, res) => {
@@ -375,7 +353,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files - Enhanced endpoint for direct file access (for the FileCard component)
+// GET /api/files - List files with pagination and filtering
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -402,17 +380,13 @@ app.get('/api/files', requireDB, async (req, res) => {
       File.countDocuments(filter)
     ]);
 
-    // Ensure Cloudinary URLs are HTTPS and accessible
+    // Add URLs for local files
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
     const enhancedFiles = files.map(file => ({
       ...file,
-      // Ensure we always have HTTPS URLs
-      cloudinaryUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
-      filePath: file.filePath?.replace('http://', 'https://'),
-      // Add direct access URLs for the FileCard component
-      viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
-      downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
-      storageProvider: 'cloudinary',
-      // Add file type for better icon selection
+      viewUrl: `${baseUrl}/uploads/${file.fileName}`,
+      downloadUrl: `${baseUrl}/api/files/${file._id}/download`,
+      storageProvider: 'local',
       fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
     }));
 
@@ -437,7 +411,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload PDF to Cloudinary with enhanced error handling
+// POST /api/upload - Upload PDF to local storage
 app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -458,11 +432,11 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
     try {
       const { semester, type, subject, year } = req.body;
       
-      console.log('📤 File uploaded to Cloudinary:', {
+      console.log('📤 File uploaded locally:', {
         filename: req.file.filename,
-        public_id: req.file.public_id,
-        url: req.file.secure_url,
-        size: req.file.size
+        originalName: req.file.originalname,
+        size: req.file.size,
+        path: req.file.path
       });
 
       await session.withTransaction(async () => {
@@ -530,28 +504,20 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
           await yearDoc.save({ session });
         }
 
-        // Create file record with enhanced Cloudinary data
+        // Create file record
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
         const fileDoc = new File({
           originalName: req.file.originalname,
           fileName: req.file.filename,
-          filePath: req.file.secure_url, // Always use HTTPS
-          cloudinaryPublicId: req.file.public_id,
-          cloudinaryUrl: req.file.secure_url, // Always use HTTPS
+          filePath: `/uploads/${req.file.filename}`,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'cloudinary',
-          uploadedAt: new Date(),
-          // Add metadata for better file management
-          metadata: {
-            width: req.file.width || null,
-            height: req.file.height || null,
-            format: req.file.format || 'pdf',
-            resourceType: req.file.resource_type || 'raw'
-          }
+          storageProvider: 'local',
+          uploadedAt: new Date()
         });
 
         await fileDoc.save({ session });
@@ -560,11 +526,11 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
         await fileDoc.populate(['semester', 'type', 'subject', 'year']);
 
         res.status(201).json({ 
-          message: 'File uploaded successfully to Cloudinary',
+          message: 'File uploaded successfully',
           file: {
             ...fileDoc.toObject(),
-            viewUrl: req.file.secure_url,
-            downloadUrl: req.file.secure_url.replace('/upload/', '/upload/fl_attachment/'),
+            viewUrl: `${baseUrl}/uploads/${req.file.filename}`,
+            downloadUrl: `${baseUrl}/api/files/${fileDoc._id}/download`,
             fileType: req.file.originalname.split('.').pop()?.toLowerCase() || 'pdf'
           }
         });
@@ -572,13 +538,13 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
     } catch (error) {
       console.error('Error uploading file:', error);
       
-      // Clean up Cloudinary file on error
-      if (req.file && req.file.public_id) {
+      // Clean up local file on error
+      if (req.file && req.file.path) {
         try {
-          await cloudinary.uploader.destroy(req.file.public_id, { resource_type: 'raw' });
-          console.log('🗑️  Cleaned up Cloudinary file:', req.file.public_id);
+          fs.unlinkSync(req.file.path);
+          console.log('🗑️  Cleaned up local file:', req.file.path);
         } catch (cleanupError) {
-          console.error('Error cleaning up Cloudinary file:', cleanupError);
+          console.error('Error cleaning up local file:', cleanupError);
         }
       }
       
@@ -592,7 +558,7 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
   });
 });
 
-// GET /api/files/:fileId/download - Enhanced download with better error handling
+// GET /api/files/:fileId/download - Download file
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -604,38 +570,27 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Verify file exists in Cloudinary before redirecting
-    if (file.cloudinaryPublicId) {
-      try {
-        await cloudinary.api.resource(file.cloudinaryPublicId, { resource_type: 'raw' });
-      } catch (cloudinaryError) {
-        if (cloudinaryError.http_code === 404) {
-          return res.status(404).json({ 
-            error: 'File no longer exists in storage',
-            message: 'This file may have been deleted'
-          });
-        }
-        throw cloudinaryError;
-      }
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ 
+        error: 'File no longer exists',
+        message: 'This file may have been deleted'
+      });
     }
 
-    // Force download with attachment flag
-    const downloadUrl = file.cloudinaryUrl || file.filePath;
-    const downloadUrlWithAttachment = downloadUrl.includes('cloudinary.com') 
-      ? downloadUrl.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/')
-      : downloadUrl.replace('http://', 'https://');
-
-    res.redirect(downloadUrlWithAttachment);
+    res.download(filePath, file.originalName);
   } catch (error) {
-    console.error('Error getting download link:', error);
+    console.error('Error downloading file:', error);
     res.status(500).json({ 
-      error: 'Failed to get download link',
+      error: 'Failed to download file',
       message: error.message 
     });
   }
 });
 
-// GET /api/files/:fileId/view - Enhanced view with better error handling
+// GET /api/files/:fileId/view - View file
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -647,203 +602,27 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Verify file exists in Cloudinary
-    if (file.cloudinaryPublicId) {
-      try {
-        await cloudinary.api.resource(file.cloudinaryPublicId, { resource_type: 'raw' });
-      } catch (cloudinaryError) {
-        if (cloudinaryError.http_code === 404) {
-          return res.status(404).json({ 
-            error: 'File no longer exists in storage',
-            message: 'This file may have been deleted'
-          });
-        }
-        throw cloudinaryError;
-      }
-    }
-
-    // Redirect to HTTPS Cloudinary URL for viewing
-    const viewUrl = (file.cloudinaryUrl || file.filePath).replace('http://', 'https://');
-    res.redirect(viewUrl);
-  } catch (error) {
-    console.error('Error getting view link:', error);
-    res.status(500).json({ 
-      error: 'Failed to get view link',
-      message: error.message 
-    });
-  }
-});
-
-// Enhanced admin routes
-app.get('/api/admin/files', requireDB, async (req, res) => {
-  try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip = (page - 1) * limit;
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     
-    // Build filter object
-    const filter = {};
-    if (req.query.semester) filter.semester = req.query.semester;
-    if (req.query.type) filter.type = req.query.type;
-    if (req.query.subject) filter.subject = req.query.subject;
-    if (req.query.year) filter.year = req.query.year;
-    if (req.query.search) {
-      filter.originalName = { $regex: req.query.search, $options: 'i' };
-    }
-
-    const [files, total] = await Promise.all([
-      File.find(filter)
-        .populate(['semester', 'type', 'subject', 'year'])
-        .sort({ uploadedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      File.countDocuments(filter)
-    ]);
-
-    // Enhance files with direct URLs
-    const enhancedFiles = files.map(file => ({
-      ...file,
-      cloudinaryUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
-      filePath: file.filePath?.replace('http://', 'https://'),
-      viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
-      downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
-      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
-    }));
-
-    res.json({
-      files: enhancedFiles,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching admin files:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch files',
-      message: error.message 
-    });
-  }
-});
-
-// PUT /api/files/:fileId - Update file metadata
-app.put('/api/files/:fileId', requireDB, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
-      return res.status(400).json({ error: 'Invalid file ID' });
-    }
-
-    const { originalName, semester, type, subject, year } = req.body;
-    
-    const file = await File.findById(req.params.fileId);
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    const session = await mongoose.startSession();
-    
-    try {
-      await session.withTransaction(async () => {
-        // Find or validate semester
-        let semesterDoc = await Semester.findOne({ name: semester }).session(session);
-        if (!semesterDoc) {
-          throw new Error('Invalid semester');
-        }
-
-        // Find or create type
-        let typeDoc = await Type.findOne({ name: type, semester: semesterDoc._id }).session(session);
-        if (!typeDoc) {
-          const typeDisplayNames = {
-            'cours': 'Cours',
-            'tp': 'Travaux Pratiques',
-            'td': 'Travaux Dirigés',
-            'devoirs': 'Devoirs',
-            'compositions': 'Compositions',
-            'ratrapages': 'Rattrapages'
-          };
-          
-          typeDoc = new Type({
-            name: type,
-            displayName: typeDisplayNames[type] || type,
-            semester: semesterDoc._id
-          });
-          await typeDoc.save({ session });
-        }
-
-        // Find or create subject
-        let subjectDoc = await Subject.findOne({
-          name: subject,
-          semester: semesterDoc._id,
-          type: typeDoc._id
-        }).session(session);
-        if (!subjectDoc) {
-          subjectDoc = new Subject({
-            name: subject,
-            semester: semesterDoc._id,
-            type: typeDoc._id
-          });
-          await subjectDoc.save({ session });
-        }
-
-        // Find or create year
-        let yearDoc = await Year.findOne({
-          year: parseInt(year),
-          semester: semesterDoc._id,
-          type: typeDoc._id,
-          subject: subjectDoc._id
-        }).session(session);
-        if (!yearDoc) {
-          yearDoc = new Year({
-            year: parseInt(year),
-            semester: semesterDoc._id,
-            type: typeDoc._id,
-            subject: subjectDoc._id
-          });
-          await yearDoc.save({ session });
-        }
-
-        // Update file metadata
-        const updatedFile = await File.findByIdAndUpdate(
-          req.params.fileId,
-          {
-            originalName,
-            semester: semesterDoc._id,
-            type: typeDoc._id,
-            subject: subjectDoc._id,
-            year: yearDoc._id,
-            updatedAt: new Date()
-          },
-          { new: true, session }
-        ).populate(['semester', 'type', 'subject', 'year']);
-
-        res.json({ 
-          message: 'File updated successfully', 
-          file: {
-            ...updatedFile.toObject(),
-            viewUrl: updatedFile.cloudinaryUrl?.replace('http://', 'https://'),
-            downloadUrl: updatedFile.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
-            fileType: updatedFile.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
-          }
-        });
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ 
+        error: 'File no longer exists',
+        message: 'This file may have been deleted'
       });
-    } finally {
-      await session.endSession();
     }
+
+    res.sendFile(filePath);
   } catch (error) {
-    console.error('Error updating file:', error);
+    console.error('Error viewing file:', error);
     res.status(500).json({ 
-      error: 'Failed to update file',
+      error: 'Failed to view file',
       message: error.message 
     });
   }
 });
 
-// DELETE /api/files/:fileId - Delete file from both database and Cloudinary
+// DELETE /api/files/:fileId - Delete file
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -855,27 +634,26 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete from Cloudinary first
-    let cloudinaryDeleted = false;
-    if (file.cloudinaryPublicId) {
+    // Delete physical file
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    let fileDeleted = false;
+    
+    if (fs.existsSync(filePath)) {
       try {
-        const result = await cloudinary.uploader.destroy(file.cloudinaryPublicId, { 
-          resource_type: 'raw' 
-        });
-        console.log('🗑️  Deleted from Cloudinary:', file.cloudinaryPublicId, result);
-        cloudinaryDeleted = result.result === 'ok';
-      } catch (cloudinaryError) {
-        console.warn('Warning: Could not delete file from Cloudinary:', cloudinaryError.message);
-        // Continue with database deletion even if Cloudinary deletion fails
+        fs.unlinkSync(filePath);
+        fileDeleted = true;
+        console.log('🗑️  Deleted local file:', filePath);
+      } catch (error) {
+        console.warn('Warning: Could not delete physical file:', error.message);
       }
     }
 
-    // Delete the file record from database
+    // Delete from database
     await File.findByIdAndDelete(req.params.fileId);
 
     res.json({ 
       message: 'File deleted successfully',
-      cloudinaryDeleted,
+      fileDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -887,7 +665,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// Enhanced stats endpoint
+// GET /api/admin/stats - Statistics endpoint
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -897,8 +675,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       totalSizeResult,
       filesByType,
       filesBySemester,
-      recentUploads,
-      storageStats
+      recentUploads
     ] = await Promise.all([
       File.countDocuments(),
       Semester.countDocuments(),
@@ -948,16 +725,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         .populate(['semester', 'type', 'subject'])
         .sort({ uploadedAt: -1 })
         .limit(10)
-        .lean(),
-      File.aggregate([
-        {
-          $group: {
-            _id: '$storageProvider',
-            count: { $sum: 1 },
-            totalSize: { $sum: '$fileSize' }
-          }
-        }
-      ])
+        .lean()
     ]);
 
     // Format file sizes
@@ -968,6 +736,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     res.json({
       overview: {
@@ -987,20 +757,13 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: file.cloudinaryUrl?.replace('http://', 'https://'),
-        downloadUrl: file.cloudinaryUrl?.replace('http://', 'https://').replace('/upload/', '/upload/fl_attachment/'),
+        viewUrl: `${baseUrl}/uploads/${file.fileName}`,
+        downloadUrl: `${baseUrl}/api/files/${file._id}/download`,
         fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageStats: storageStats.map(stat => ({
-        ...stat,
-        totalSizeFormatted: formatFileSize(stat.totalSize)
-      })),
-      storageProvider: 'Cloudinary',
-      cloudConfig: {
-        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-        folder: 'university-archive/pdfs'
-      }
+      storageProvider: 'Local File System',
+      storageLocation: uploadsDir
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);
@@ -1011,7 +774,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint with comprehensive status
+// Health check endpoint
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1021,24 +784,11 @@ app.get('/api/health', async (req, res) => {
     3: 'Disconnecting'
   };
 
-  // Test Cloudinary connection
-  let cloudinaryStatus = 'Unknown';
-  let cloudinaryError = null;
-  let cloudinaryDetails = {};
-  
-  try {
-    const pingResult = await cloudinary.api.ping();
-    cloudinaryStatus = 'Connected';
-    cloudinaryDetails = {
-      status: pingResult.status,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME
-    };
-  } catch (error) {
-    cloudinaryStatus = 'Disconnected';
-    cloudinaryError = error.message;
-  }
+  // Check uploads directory
+  const uploadsExists = fs.existsSync(uploadsDir);
+  const uploadsDirStats = uploadsExists ? fs.statSync(uploadsDir) : null;
 
-  // Check file count for basic functionality
+  // Check file count
   let fileCount = 0;
   let dbError = null;
   
@@ -1050,7 +800,7 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
-  const overallStatus = (dbStatus === 1 && cloudinaryStatus === 'Connected') ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1 && uploadsExists) ? 'OK' : 'Warning';
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
@@ -1062,18 +812,14 @@ app.get('/api/health', async (req, res) => {
         host: process.env.MONGO_HOST,
         name: process.env.MONGO_DB_NAME,
         fileCount: dbStatus === 1 ? fileCount : null,
-        ...(dbError && { error: dbError }),
-        ...(dbStatus !== 1 && { error: 'Database connection issue' })
-      },
-      cloudinary: {
-        status: cloudinaryStatus,
-        ...cloudinaryDetails,
-        ...(cloudinaryError && { error: cloudinaryError })
+        ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'Cloudinary',
-        folder: 'university-archive/pdfs',
-        status: cloudinaryStatus
+        provider: 'Local File System',
+        uploadsDir,
+        exists: uploadsExists,
+        isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
+        writable: uploadsExists ? fs.constants.W_OK : false
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1082,86 +828,6 @@ app.get('/api/health', async (req, res) => {
     version: process.env.npm_package_version || '1.0.0',
     nodeVersion: process.version
   });
-});
-
-// Bulk operations for admin
-app.post('/api/admin/files/bulk-delete', requireDB, async (req, res) => {
-  try {
-    const { fileIds } = req.body;
-    
-    if (!Array.isArray(fileIds) || fileIds.length === 0) {
-      return res.status(400).json({ error: 'No file IDs provided' });
-    }
-
-    // Validate all IDs
-    const invalidIds = fileIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
-    if (invalidIds.length > 0) {
-      return res.status(400).json({ 
-        error: 'Invalid file IDs',
-        invalidIds 
-      });
-    }
-
-    // Find all files to be deleted
-    const files = await File.find({ _id: { $in: fileIds } });
-    
-    if (files.length === 0) {
-      return res.status(404).json({ error: 'No files found' });
-    }
-
-    let cloudinaryDeleted = 0;
-    let cloudinaryFailed = 0;
-    const failedDeletions = [];
-
-    // Delete from Cloudinary
-    for (const file of files) {
-      if (file.cloudinaryPublicId) {
-        try {
-          const result = await cloudinary.uploader.destroy(file.cloudinaryPublicId, { 
-            resource_type: 'raw' 
-          });
-          if (result.result === 'ok') {
-            cloudinaryDeleted++;
-          } else {
-            cloudinaryFailed++;
-            failedDeletions.push({
-              fileId: file._id,
-              fileName: file.originalName,
-              error: 'Cloudinary deletion failed'
-            });
-          }
-        } catch (error) {
-          cloudinaryFailed++;
-          failedDeletions.push({
-            fileId: file._id,
-            fileName: file.originalName,
-            error: error.message
-          });
-        }
-      }
-    }
-
-    // Delete from database
-    const deleteResult = await File.deleteMany({ _id: { $in: fileIds } });
-
-    res.json({
-      message: 'Bulk deletion completed',
-      summary: {
-        requested: fileIds.length,
-        found: files.length,
-        deletedFromDatabase: deleteResult.deletedCount,
-        deletedFromCloudinary: cloudinaryDeleted,
-        cloudinaryFailed,
-        failedDeletions
-      }
-    });
-  } catch (error) {
-    console.error('Error in bulk delete:', error);
-    res.status(500).json({ 
-      error: 'Failed to delete files',
-      message: error.message 
-    });
-  }
 });
 
 // Initialize default semesters
@@ -1188,114 +854,6 @@ async function initializeSemesters() {
   }
 }
 
-// Enhanced cleanup function for orphaned file records
-async function cleanupOrphanedFiles() {
-  try {
-    console.log('🧹 Starting cleanup of orphaned files...');
-    
-    const files = await File.find({}).lean();
-    let cleaned = 0;
-    let checked = 0;
-    
-    console.log(`📋 Found ${files.length} files to verify`);
-    
-    for (const file of files) {
-      checked++;
-      
-      // For Cloudinary files, check if they exist
-      if (file.cloudinaryPublicId) {
-        try {
-          await cloudinary.api.resource(file.cloudinaryPublicId, { 
-            resource_type: 'raw' 
-          });
-          
-          // File exists, optionally log progress
-          if (checked % 100 === 0) {
-            console.log(`✓ Verified ${checked}/${files.length} files...`);
-          }
-        } catch (error) {
-          if (error.http_code === 404) {
-            // File doesn't exist in Cloudinary, remove from database
-            await File.findByIdAndDelete(file._id);
-            cleaned++;
-            console.log(`🗑️  Cleaned orphaned file record: ${file.originalName} (${file.cloudinaryPublicId})`);
-          } else {
-            console.warn(`⚠️  Error checking file ${file.originalName}:`, error.message);
-          }
-        }
-      } else {
-        // File without Cloudinary ID - might be legacy, check if URL is accessible
-        if (file.filePath && !file.filePath.includes('cloudinary.com')) {
-          console.log(`🔍 Found legacy file without Cloudinary ID: ${file.originalName}`);
-          // Optionally mark for manual review or migration
-        }
-      }
-    }
-    
-    if (cleaned > 0) {
-      console.log(`✅ Cleanup completed: ${cleaned} orphaned file records removed`);
-    } else {
-      console.log('✅ No orphaned files found');
-    }
-    
-    return { checked, cleaned };
-  } catch (error) {
-    console.error('❌ Error during cleanup:', error);
-    return { checked: 0, cleaned: 0, error: error.message };
-  }
-}
-
-// Cloudinary webhook handler (optional, for advanced file management)
-app.post('/api/webhooks/cloudinary', express.raw({ type: 'application/json' }), async (req, res) => {
-  try {
-    // Verify webhook signature if configured
-    // const signature = req.headers['x-cld-signature'];
-    // const timestamp = req.headers['x-cld-timestamp'];
-    
-    const event = JSON.parse(req.body.toString());
-    
-    console.log('📡 Cloudinary webhook received:', event.notification_type);
-    
-    // Handle different webhook events
-    switch (event.notification_type) {
-      case 'upload':
-        console.log('📤 File uploaded to Cloudinary:', event.public_id);
-        break;
-        
-      case 'delete':
-        console.log('🗑️  File deleted from Cloudinary:', event.public_id);
-        // Optionally remove from database if not already done
-        const deletedFile = await File.findOneAndDelete({ 
-          cloudinaryPublicId: event.public_id 
-        });
-        if (deletedFile) {
-          console.log('🗑️  Corresponding database record removed');
-        }
-        break;
-        
-      case 'rename':
-        console.log('✏️  File renamed in Cloudinary:', {
-          from: event.public_id,
-          to: event.to_public_id
-        });
-        // Update database record
-        await File.findOneAndUpdate(
-          { cloudinaryPublicId: event.public_id },
-          { cloudinaryPublicId: event.to_public_id }
-        );
-        break;
-        
-      default:
-        console.log('📡 Unhandled webhook event:', event.notification_type);
-    }
-    
-    res.status(200).json({ received: true });
-  } catch (error) {
-    console.error('❌ Webhook error:', error);
-    res.status(400).json({ error: 'Webhook processing failed' });
-  }
-});
-
 // Graceful shutdown handler
 const gracefulShutdown = async (signal) => {
   console.log(`\n📡 Received ${signal}, shutting down gracefully...`);
@@ -1307,7 +865,7 @@ const gracefulShutdown = async (signal) => {
   try {
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
-      console.log('✅ MongoDB Atlas connection closed');
+      console.log('✅ MongoDB connection closed');
     }
   } catch (error) {
     console.error('❌ Error closing database connection:', error);
@@ -1320,7 +878,7 @@ const gracefulShutdown = async (signal) => {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Enhanced error handling middleware
+// Error handling middleware
 app.use((error, req, res, next) => {
   console.error('💥 Unhandled error:', {
     message: error.message,
@@ -1331,7 +889,6 @@ app.use((error, req, res, next) => {
     timestamp: new Date().toISOString()
   });
   
-  // Don't leak error details in production
   const message = process.env.NODE_ENV === 'production' 
     ? 'Internal server error' 
     : error.message;
@@ -1344,7 +901,7 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Enhanced 404 handler
+// 404 handler
 app.use('*', (req, res) => {
   console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
   
@@ -1367,14 +924,13 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n☁️  University Archive Server (Enhanced Cloudinary Edition)`);
+  console.log(`\n📁 University Archive Server (Local Storage Edition)`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base URL: ${process.env.NODE_ENV === 'production' ? 'https://archive-mi73.onrender.com' : `http://localhost:${PORT}`}`);
-  console.log(`☁️  File Storage: Cloudinary (${process.env.CLOUDINARY_CLOUD_NAME})`);
+  console.log(`🔗 API Base URL: ${process.env.NODE_ENV === 'production' ? 'https://your-domain.com' : `http://localhost:${PORT}`}`);
+  console.log(`💾 File Storage: Local file system (${uploadsDir})`);
   console.log(`🛡️  Security: Helmet + Rate Limiting enabled`);
-  console.log(`🔄 Proxy Trust: Enabled for deployment platforms`);
-  console.log(`🌐 CORS: Enhanced with dynamic origin validation`);
+  console.log(`🌐 CORS: Enabled for development origins`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -1382,33 +938,20 @@ app.listen(PORT, async () => {
       clearInterval(waitForDB);
       
       console.log('🔧 Initializing application...');
-      
       await initializeSemesters();
       
-      // Run cleanup on startup (but don't wait for it)
-      cleanupOrphanedFiles()
-        .then(result => {
-          if (result.error) {
-            console.log('⚠️  Cleanup completed with errors:', result.error);
-          } else {
-            console.log(`✅ Startup cleanup: ${result.checked} files checked, ${result.cleaned} orphaned records removed`);
-          }
-        })
-        .catch(error => {
-          console.error('❌ Startup cleanup failed:', error.message);
-        });
-      
       console.log('🎯 Server ready to accept connections');
-      console.log('📤 Files will be uploaded to Cloudinary cloud storage');
+      console.log('📤 Files will be stored locally in /uploads directory');
       console.log('📊 Admin panel: /api/admin/stats');
       console.log('🔍 Health check: /api/health');
       
-      // Log environment-specific info
       if (process.env.NODE_ENV === 'production') {
         console.log('🚀 Running in PRODUCTION mode');
+        console.log('⚠️  Make sure to backup your uploads directory regularly');
       } else {
         console.log('🛠️  Running in DEVELOPMENT mode');
         console.log(`📝 API Documentation available at http://localhost:${PORT}/api/health`);
+        console.log(`📁 Uploaded files accessible at http://localhost:${PORT}/uploads/`);
       }
     }
   }, 1000);
