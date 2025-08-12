@@ -61,10 +61,12 @@ const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     
-    const allowedOrigins = [
+     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:3001',
+      'https://www.larchive.tech',  // Add this line
+      'https://larchive.tech',      // And this if you want both www and non-www
       // Add your frontend deployment URLs here
       /\.vercel\.app$/,
       /\.netlify\.app$/,
