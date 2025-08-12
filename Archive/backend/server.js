@@ -67,6 +67,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
+// FIXED: Removed bufferMaxEntries which is deprecated in Mongoose 7.x
 const mongooseOptions = {
   serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
   socketTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT) || 45000,
@@ -74,7 +75,10 @@ const mongooseOptions = {
   minPoolSize: 5,
   maxIdleTimeMS: 30000,
   bufferCommands: false,
-  bufferMaxEntries: 0
+  // bufferMaxEntries: 0  <-- REMOVED: This was causing the deployment error
+  connectTimeoutMS: 30000,
+  heartbeatFrequencyMS: 10000,
+  serverSelectionRetryDelay: 2000
 };
 
 console.log('🔄 Attempting to connect to MongoDB Atlas...');
@@ -84,6 +88,8 @@ console.log('Username:', process.env.MONGO_USERNAME);
 
 let isConnecting = false;
 let reconnectTimeout;
+let retryCount = 0;
+const maxRetries = 5;
 
 const connectDB = async () => {
   if (isConnecting) return;
@@ -92,14 +98,20 @@ const connectDB = async () => {
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
     console.log('✅ Connected to MongoDB Atlas successfully');
+    retryCount = 0; // Reset retry count on successful connection
     isConnecting = false;
   } catch (error) {
     console.error('❌ MongoDB Atlas connection error:', error.message);
     isConnecting = false;
+    retryCount++;
     
-    // Retry connection after delay
-    console.log('🔄 Retrying connection in 5 seconds...');
-    reconnectTimeout = setTimeout(connectDB, 5000);
+    if (retryCount <= maxRetries) {
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Exponential backoff, max 30s
+      console.log(`🔄 Retrying connection in ${delay/1000} seconds... (attempt ${retryCount}/${maxRetries})`);
+      reconnectTimeout = setTimeout(connectDB, delay);
+    } else {
+      console.error('❌ Max retry attempts reached. Please check your MongoDB configuration.');
+    }
   }
 };
 
@@ -121,7 +133,7 @@ mongoose.connection.on('error', (err) => {
 
 mongoose.connection.on('disconnected', () => {
   console.log('⚠️  Mongoose disconnected from MongoDB Atlas');
-  if (!isConnecting && !reconnectTimeout) {
+  if (!isConnecting && !reconnectTimeout && retryCount < maxRetries) {
     console.log('🔄 Attempting to reconnect...');
     reconnectTimeout = setTimeout(connectDB, 5000);
   }
