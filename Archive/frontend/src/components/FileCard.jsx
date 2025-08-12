@@ -47,27 +47,6 @@ const fileThemes = [
   }
 ];
 
-// API Configuration - supports multiple environments
-const API_CONFIG = {
-  // Try to detect the API base URL from environment or current location
-  getBaseURL: () => {
-    // Check if we're in development (localhost)
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return 'http://localhost:5000'; // Local development server
-    }
-    
-    // For production, use the current origin or a configured API URL
-    // You can set this via environment variables in your build process
-    return process.env.REACT_APP_API_URL || window.location.origin;
-  },
-  
-  // Get full API URL with path
-  getURL: (path) => {
-    const baseURL = API_CONFIG.getBaseURL();
-    return `${baseURL}${path.startsWith('/') ? path : '/' + path}`;
-  }
-};
-
 // Enhanced responsive breakpoints hook
 const useBreakpoints = () => {
   const [breakpoint, setBreakpoint] = useState('desktop');
@@ -166,7 +145,26 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// Enhanced FileCard with dynamic API integration
+// Helper function to ensure HTTPS URLs
+const ensureHttps = (url) => {
+  if (!url) return null;
+  return url.replace(/^http:/, 'https:');
+};
+
+// Helper function to get Cloudinary download URL
+const getCloudinaryDownloadUrl = (url) => {
+  if (!url || !url.includes('cloudinary.com')) return url;
+  return ensureHttps(url.replace('/upload/', '/upload/fl_attachment/'));
+};
+
+// Helper function to detect if we're in production
+const isProduction = () => {
+  return window.location.hostname !== 'localhost' && 
+         window.location.hostname !== '127.0.0.1' &&
+         !window.location.hostname.includes('localhost');
+};
+
+// Enhanced FileCard with improved production deployment support
 export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
@@ -178,9 +176,28 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const isTablet = breakpoint === 'tablet';
   const isDesktop = ['desktop-small', 'desktop'].includes(breakpoint);
 
-  // Get the API base URL - use prop, then fallback to auto-detection
+  // Get the best available URL for the file
+  const getFileUrl = (forDownload = false) => {
+    // Priority: cloudinaryUrl > viewUrl > downloadUrl > filePath
+    let url = file.cloudinaryUrl || file.viewUrl || file.downloadUrl || file.filePath;
+    
+    if (!url) return null;
+    
+    // Ensure HTTPS
+    url = ensureHttps(url);
+    
+    // Add download flag for Cloudinary URLs if needed
+    if (forDownload && url.includes('cloudinary.com')) {
+      url = url.replace('/upload/', '/upload/fl_attachment/');
+    }
+    
+    return url;
+  };
+
+  // Get API endpoint URL - only used as fallback
   const getApiUrl = (endpoint) => {
-    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
+    const baseUrl = apiBaseUrl || 
+      (isProduction() ? 'https://archive-mi73.onrender.com' : 'http://localhost:5000');
     return `${baseUrl}${endpoint}`;
   };
 
@@ -192,86 +209,92 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Enhanced view handler with error handling
+  // Enhanced view handler with direct URL priority
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Check if the file has a direct Cloudinary URL
-      if (file.cloudinaryUrl) {
-        window.open(file.cloudinaryUrl, '_blank');
+      // First priority: Direct Cloudinary/file URL
+      const directUrl = getFileUrl(false);
+      if (directUrl) {
+        console.log('Opening direct URL:', directUrl);
+        window.open(directUrl, '_blank');
         return;
       }
       
-      // Fallback to API endpoint
-      const viewUrl = getApiUrl(`/api/files/${file._id}/view`);
-      
-      // Test if the endpoint is accessible
-      const response = await fetch(viewUrl, { method: 'HEAD' });
-      
-      if (response.ok) {
-        window.open(viewUrl, '_blank');
-      } else {
-        // If API is not accessible, try direct Cloudinary URL from file path
-        if (file.filePath && file.filePath.includes('cloudinary.com')) {
-          window.open(file.filePath, '_blank');
-        } else {
-          throw new Error('File not accessible');
-        }
+      // Fallback: Try API endpoint (for legacy files or special cases)
+      if (file._id) {
+        const apiUrl = getApiUrl(`/api/files/${file._id}/view`);
+        console.log('Trying API URL:', apiUrl);
+        
+        // Open directly without testing (let the server handle redirects)
+        window.open(apiUrl, '_blank');
+        return;
       }
+      
+      throw new Error('No valid file URL found');
+      
     } catch (err) {
       console.error('Error viewing file:', err);
-      setError('Unable to view file');
-      
-      // Last resort: try opening the file path directly
-      if (file.filePath) {
-        window.open(file.filePath, '_blank');
-      }
+      setError('Unable to open file. The file may no longer be available.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Enhanced download handler with error handling
+  // Enhanced download handler with direct URL priority
   const handleDownload = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Check if the file has a direct Cloudinary download URL
-      if (file.cloudinaryUrl) {
-        // Add Cloudinary download flag
-        const downloadUrl = file.cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/');
-        window.location.href = downloadUrl;
+      // First priority: Direct download URL
+      const directUrl = getFileUrl(true);
+      if (directUrl) {
+        console.log('Downloading from direct URL:', directUrl);
+        
+        // Create a temporary link for download
+        const link = document.createElement('a');
+        link.href = directUrl;
+        link.download = file.originalName || 'download.pdf';
+        link.target = '_blank';
+        
+        // For mobile devices, use window.location instead of click
+        if (isMobile) {
+          window.location.href = directUrl;
+        } else {
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
         return;
       }
       
-      // Fallback to API endpoint
-      const downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
-      
-      // Test if the endpoint is accessible
-      const response = await fetch(downloadUrl, { method: 'HEAD' });
-      
-      if (response.ok) {
-        window.location.href = downloadUrl;
-      } else {
-        // If API is not accessible, try direct Cloudinary download URL
-        if (file.filePath && file.filePath.includes('cloudinary.com')) {
-          const directDownloadUrl = file.filePath.replace('/upload/', '/upload/fl_attachment/');
-          window.location.href = directDownloadUrl;
+      // Fallback: Try API endpoint
+      if (file._id) {
+        const apiUrl = getApiUrl(`/api/files/${file._id}/download`);
+        console.log('Trying API download URL:', apiUrl);
+        
+        if (isMobile) {
+          window.location.href = apiUrl;
         } else {
-          throw new Error('File not accessible');
+          const link = document.createElement('a');
+          link.href = apiUrl;
+          link.download = file.originalName || 'download.pdf';
+          link.target = '_blank';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
         }
+        return;
       }
+      
+      throw new Error('No valid download URL found');
+      
     } catch (err) {
       console.error('Error downloading file:', err);
-      setError('Unable to download file');
-      
-      // Last resort: try downloading the file path directly
-      if (file.filePath) {
-        window.location.href = file.filePath;
-      }
+      setError('Unable to download file. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -637,6 +660,23 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     marginBottom: '0.5rem',
   };
 
+  // Debug info for development
+  const debugInfo = !isProduction() && (
+    <div style={{
+      position: 'absolute',
+      top: '5px',
+      left: '5px',
+      fontSize: '8px',
+      color: 'rgba(255,255,255,0.7)',
+      background: 'rgba(0,0,0,0.3)',
+      padding: '2px 4px',
+      borderRadius: '3px',
+      zIndex: 10
+    }}>
+      {getFileUrl() ? '✓' : '✗'}
+    </div>
+  );
+
   // Enhanced interaction handlers
   const handleContainerHover = (e, isHovering) => {
     if (isDesktop && !('ontouchstart' in window)) {
@@ -743,6 +783,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       >
         <div style={headerStyle}>
           {decorativeElements}
+          {debugInfo}
           <div style={fileIconStyle}>
             {fileIcon}
           </div>
@@ -797,7 +838,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   );
 };
 
-// Enhanced Files Page Component with API integration
+// Enhanced Files Page Component
 export const FilesPage = ({ files = [], loading = false, error = null, onRetry, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
@@ -1036,102 +1077,87 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   );
 };
 
-// Enhanced demo component with cloud server integration
-const CloudServerFileDemo = () => {
+// Production-ready demo component with real server integration
+const ProductionFileDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Cloud server sample files with Cloudinary URLs
-  const sampleCloudFiles = [
-    {
-      _id: '674a1b2c3d4e5f6789012345',
-      originalName: 'Cours_Algorithmes_2024.pdf',
-      fileName: '1734567890123-Cours_Algorithmes_2024',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567890123-Cours_Algorithmes_2024',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
-      fileSize: 2048576,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012346',
-      originalName: 'TP_Base_de_Donnees.pdf',
-      fileName: '1734567891234-TP_Base_de_Donnees',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567891234-TP_Base_de_Donnees',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
-      fileSize: 1572864,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012347',
-      originalName: 'Examen_Final_Mathematiques.pdf',
-      fileName: '1734567892345-Examen_Final_Mathematiques',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567892345-Examen_Final_Mathematiques',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
-      fileSize: 3145728,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012348',
-      originalName: 'TD_Analyse_Numerique.pdf',
-      fileName: '1734567893456-TD_Analyse_Numerique',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567893456-TD_Analyse_Numerique',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
-      fileSize: 987654,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012349',
-      originalName: 'Projet_Fin_Etude_Guide.pdf',
-      fileName: '1734567894567-Projet_Fin_Etude_Guide',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      fileSize: 5242880,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    }
-  ];
+  // Production API base URL
+  const apiBaseUrl = 'https://archive-mi73.onrender.com';
 
-  // Simulate loading from cloud server
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setCurrentFiles(sampleCloudFiles);
+  // Fetch files from the real API
+  const fetchFiles = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      console.log('Fetching files from:', `${apiBaseUrl}/api/files`);
+      
+      const response = await fetch(`${apiBaseUrl}/api/files?limit=20&page=1`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        // Add timeout
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      console.log('API Response:', data);
+      
+      // Handle different response formats
+      const files = data.files || data || [];
+      
+      if (Array.isArray(files)) {
+        setCurrentFiles(files);
+        console.log(`Loaded ${files.length} files successfully`);
+      } else {
+        throw new Error('Invalid response format: expected array of files');
+      }
+      
+    } catch (err) {
+      console.error('Error fetching files:', err);
+      
+      // Provide more specific error messages
+      let errorMessage = 'Failed to load files';
+      
+      if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+        errorMessage = 'Request timed out. Please check your connection and try again.';
+      } else if (err.message.includes('NetworkError') || err.message.includes('Failed to fetch')) {
+        errorMessage = 'Network error. Please check your internet connection.';
+      } else if (err.message.includes('500')) {
+        errorMessage = 'Server error. Please try again later.';
+      } else if (err.message.includes('404')) {
+        errorMessage = 'API endpoint not found. Please contact support.';
+      } else {
+        errorMessage = `Error: ${err.message}`;
+      }
+      
+      setError(errorMessage);
+    } finally {
       setLoading(false);
-    }, 2000);
+    }
+  };
 
-    return () => clearTimeout(timer);
+  // Load files on component mount
+  useEffect(() => {
+    fetchFiles();
   }, []);
 
   const handleRetry = () => {
-    setLoading(true);
-    setError(null);
-    setCurrentFiles([]);
-    
-    // Simulate retry with potential error
-    setTimeout(() => {
-      const success = Math.random() > 0.3; // 70% success rate
-      
-      if (success) {
-        setCurrentFiles(sampleCloudFiles);
-        setLoading(false);
-      } else {
-        setError('Impossible de se connecter au serveur cloud. Vérifiez votre connexion internet.');
-        setLoading(false);
-      }
-    }, 1500);
+    fetchFiles();
   };
 
-  // API Configuration - You should set this to your actual server URL
-  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://archive-mi73.onrender.com';
+  // Check if we're in production
+  const isProductionEnv = window.location.hostname !== 'localhost' && 
+                         window.location.hostname !== '127.0.0.1';
 
   return (
     <div style={{
@@ -1140,6 +1166,28 @@ const CloudServerFileDemo = () => {
       backgroundAttachment: 'fixed',
       backgroundSize: 'cover',
     }}>
+      {/* Debug info for development */}
+      {!isProductionEnv && (
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          background: 'rgba(0,0,0,0.8)',
+          color: 'white',
+          padding: '10px',
+          borderRadius: '8px',
+          fontSize: '12px',
+          zIndex: 1000,
+          maxWidth: '300px'
+        }}>
+          <div><strong>Debug Info:</strong></div>
+          <div>API: {apiBaseUrl}</div>
+          <div>Files: {currentFiles.length}</div>
+          <div>Loading: {loading.toString()}</div>
+          <div>Error: {error || 'none'}</div>
+        </div>
+      )}
+      
       <FilesPage 
         files={currentFiles} 
         loading={loading} 
@@ -1151,4 +1199,4 @@ const CloudServerFileDemo = () => {
   );
 };
 
-export default CloudServerFileDemo;
+export default ProductionFileDemo;
