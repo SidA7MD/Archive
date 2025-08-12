@@ -1131,7 +1131,7 @@ const CloudServerFileDemo = () => {
   };
 
   // API Configuration - You should set this to your actual server URL
-  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://your-server-url.com';
+  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://archive-mi73.onrender.com';
 
   return (
     <div style={{
