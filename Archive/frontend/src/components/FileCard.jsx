@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet } from 'lucide-react';
-import styles from './FileCard.module.css';
 
 // Color schemes for different file types/states
 const fileThemes = [
@@ -48,13 +47,25 @@ const fileThemes = [
   }
 ];
 
-// API Configuration - supports multiple environments
+// Enhanced API Configuration - Fixed for production deployment
 const API_CONFIG = {
   getBaseURL: () => {
+    // For production deployment
+    if (window.location.hostname.includes('render.com') || 
+        window.location.hostname.includes('vercel.app') ||
+        window.location.hostname.includes('netlify.app') ||
+        window.location.hostname === 'larchive.tech' ||
+        window.location.hostname === 'www.larchive.tech') {
+      return 'https://archive-mi73.onrender.com';
+    }
+    
+    // For local development
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:5000';
     }
-    return process.env.REACT_APP_API_URL || window.location.origin;
+    
+    // Fallback to environment variable or current origin
+    return process.env.REACT_APP_API_URL || 'https://archive-mi73.onrender.com';
   },
   
   getURL: (path) => {
@@ -161,7 +172,7 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// Enhanced FileCard with dynamic API integration
+// Enhanced FileCard with fixed production API integration
 export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
@@ -173,7 +184,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const isTablet = breakpoint === 'tablet';
   const isDesktop = ['desktop-small', 'desktop'].includes(breakpoint);
 
-  // Get the API base URL - use prop, then fallback to auto-detection
+  // Get the API base URL with proper fallback
   const getApiUrl = (endpoint) => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     return `${baseUrl}${endpoint}`;
@@ -187,190 +198,320 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Enhanced view handler with error handling
+  // Enhanced view handler with direct Cloudinary URLs and fallbacks
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
+      console.log('Attempting to view file:', file);
+      
+      // Priority 1: Direct Cloudinary URL
       if (file.cloudinaryUrl) {
-        window.open(file.cloudinaryUrl, '_blank');
+        const httpsUrl = file.cloudinaryUrl.replace('http://', 'https://');
+        console.log('Opening Cloudinary URL:', httpsUrl);
+        window.open(httpsUrl, '_blank');
         return;
       }
       
-      const viewUrl = getApiUrl(`/api/files/${file._id}/view`);
-      const response = await fetch(viewUrl, { method: 'HEAD' });
+      // Priority 2: File path (likely Cloudinary)
+      if (file.filePath) {
+        const httpsUrl = file.filePath.replace('http://', 'https://');
+        console.log('Opening file path:', httpsUrl);
+        window.open(httpsUrl, '_blank');
+        return;
+      }
       
-      if (response.ok) {
-        window.open(viewUrl, '_blank');
-      } else {
-        if (file.filePath && file.filePath.includes('cloudinary.com')) {
-          window.open(file.filePath, '_blank');
-        } else {
-          throw new Error('File not accessible');
+      // Priority 3: Constructed view URL if we have an ID
+      if (file._id) {
+        const viewUrl = getApiUrl(`/api/files/${file._id}/view`);
+        console.log('Attempting API view:', viewUrl);
+        
+        // Try to check if the API endpoint is accessible
+        try {
+          const response = await fetch(viewUrl, { 
+            method: 'HEAD',
+            mode: 'cors',
+            credentials: 'omit'
+          });
+          
+          if (response.ok || response.status === 302) {
+            window.open(viewUrl, '_blank');
+            return;
+          }
+        } catch (fetchError) {
+          console.warn('API check failed, will try direct open:', fetchError);
+          // Still try to open it - might work
+          window.open(viewUrl, '_blank');
+          return;
         }
       }
+      
+      throw new Error('No valid URL found for viewing this file');
+      
     } catch (err) {
       console.error('Error viewing file:', err);
-      setError('Unable to view file');
-      
-      if (file.filePath) {
-        window.open(file.filePath, '_blank');
-      }
+      setError(`Unable to view file: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Enhanced download handler with error handling
+  // Enhanced download handler with direct Cloudinary URLs and fallbacks
   const handleDownload = async () => {
     try {
       setLoading(true);
       setError(null);
       
+      console.log('Attempting to download file:', file);
+      
+      // Priority 1: Cloudinary URL with attachment flag
       if (file.cloudinaryUrl) {
-        const downloadUrl = file.cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/');
+        let downloadUrl = file.cloudinaryUrl.replace('http://', 'https://');
+        
+        // Add attachment flag for Cloudinary URLs to force download
+        if (downloadUrl.includes('cloudinary.com')) {
+          downloadUrl = downloadUrl.replace('/upload/', '/upload/fl_attachment/');
+        }
+        
+        console.log('Downloading from Cloudinary:', downloadUrl);
+        
+        // Create a temporary link to trigger download
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = file.originalName || 'document.pdf';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+      
+      // Priority 2: File path with attachment flag
+      if (file.filePath) {
+        let downloadUrl = file.filePath.replace('http://', 'https://');
+        
+        if (downloadUrl.includes('cloudinary.com')) {
+          downloadUrl = downloadUrl.replace('/upload/', '/upload/fl_attachment/');
+        }
+        
+        console.log('Downloading from file path:', downloadUrl);
+        
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = file.originalName || 'document.pdf';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+      
+      // Priority 3: API download endpoint
+      if (file._id) {
+        const downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
+        console.log('Attempting API download:', downloadUrl);
+        
+        // For download, we can directly navigate to the URL
         window.location.href = downloadUrl;
         return;
       }
       
-      const downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
-      const response = await fetch(downloadUrl, { method: 'HEAD' });
+      throw new Error('No valid URL found for downloading this file');
       
-      if (response.ok) {
-        window.location.href = downloadUrl;
-      } else {
-        if (file.filePath && file.filePath.includes('cloudinary.com')) {
-          const directDownloadUrl = file.filePath.replace('/upload/', '/upload/fl_attachment/');
-          window.location.href = directDownloadUrl;
-        } else {
-          throw new Error('File not accessible');
-        }
-      }
     } catch (err) {
       console.error('Error downloading file:', err);
-      setError('Unable to download file');
-      
-      if (file.filePath) {
-        window.location.href = file.filePath;
-      }
+      setError(`Unable to download file: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Create CSS custom properties for the theme
-  const themeStyles = {
+  // Create CSS styles for the card
+  const cardStyle = {
     '--theme-gradient': theme.gradient,
     '--theme-color': theme.color,
     '--theme-shadow': theme.shadow,
+    background: 'white',
+    borderRadius: '16px',
+    boxShadow: `0 8px 32px ${theme.shadow}`,
+    overflow: 'hidden',
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    border: '1px solid rgba(255, 255, 255, 0.2)',
+    position: 'relative',
+    cursor: 'pointer',
+    maxWidth: '350px',
+    minHeight: isMobile ? '200px' : '280px'
   };
 
-  const containerClasses = [
-    styles.container,
-    styles[`container-${breakpoint}`],
-    isMobile ? styles.mobile : '',
-    isTablet ? styles.tablet : '',
-    isDesktop ? styles.desktop : '',
-  ].filter(Boolean).join(' ');
+  const headerStyle = {
+    background: theme.gradient,
+    height: isMobile ? '80px' : '120px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden'
+  };
 
-  const headerClasses = [
-    styles.header,
-    styles[`header-${breakpoint}`],
-    isMobile ? styles.headerMobile : '',
-  ].filter(Boolean).join(' ');
+  const iconStyle = {
+    color: 'white',
+    zIndex: 2,
+    position: 'relative',
+    filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))'
+  };
 
-  const fileIconClasses = [
-    styles.fileIcon,
-    isMobile ? styles.fileIconMobile : '',
-  ].filter(Boolean).join(' ');
+  const contentStyle = {
+    padding: isMobile ? '16px' : '20px'
+  };
 
-  const contentClasses = [
-    styles.content,
-    styles[`content-${breakpoint}`],
-    isMobile ? styles.contentMobile : '',
-  ].filter(Boolean).join(' ');
+  const titleStyle = {
+    fontSize: isMobile ? '14px' : '16px',
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: '8px',
+    lineHeight: '1.4',
+    wordBreak: 'break-word',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden'
+  };
 
-  const titleClasses = [
-    styles.title,
-    styles[`title-${breakpoint}`],
-    isMobile ? styles.titleMobile : '',
-  ].filter(Boolean).join(' ');
+  const sizeStyle = {
+    fontSize: isMobile ? '12px' : '14px',
+    color: '#666',
+    marginBottom: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px'
+  };
 
-  const sizeClasses = [
-    styles.size,
-    styles[`size-${breakpoint}`],
-    isMobile ? styles.sizeMobile : '',
-  ].filter(Boolean).join(' ');
+  const actionsStyle = {
+    display: 'flex',
+    gap: '8px',
+    flexDirection: isMobile ? 'column' : 'row'
+  };
 
-  const actionsClasses = [
-    styles.actions,
-    isMobile ? styles.actionsMobile : '',
-  ].filter(Boolean).join(' ');
+  const buttonBaseStyle = {
+    padding: isMobile ? '10px 16px' : '12px 20px',
+    borderRadius: '8px',
+    border: 'none',
+    fontSize: isMobile ? '13px' : '14px',
+    fontWeight: '500',
+    cursor: loading ? 'not-allowed' : 'pointer',
+    transition: 'all 0.2s ease',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    opacity: loading ? 0.7 : 1,
+    flex: isMobile ? '1' : '0 1 auto'
+  };
 
-  const viewButtonClasses = [
-    styles.baseButton,
-    styles.viewButton,
-    styles[`button-${breakpoint}`],
-    isMobile ? styles.buttonMobile : '',
-    loading ? styles.loading : '',
-  ].filter(Boolean).join(' ');
+  const viewButtonStyle = {
+    ...buttonBaseStyle,
+    backgroundColor: theme.color,
+    color: 'white'
+  };
 
-  const downloadButtonClasses = [
-    styles.baseButton,
-    styles.downloadButton,
-    styles[`button-${breakpoint}`],
-    isMobile ? styles.buttonMobile : '',
-    loading ? styles.loading : '',
-  ].filter(Boolean).join(' ');
+  const downloadButtonStyle = {
+    ...buttonBaseStyle,
+    backgroundColor: 'transparent',
+    color: theme.color,
+    border: `2px solid ${theme.color}`
+  };
+
+  const errorStyle = {
+    color: '#e74c3c',
+    fontSize: '12px',
+    marginBottom: '12px',
+    padding: '8px',
+    backgroundColor: '#fef2f2',
+    borderRadius: '4px',
+    border: '1px solid #fecaca'
+  };
 
   return (
-    <div 
-      className={containerClasses}
-      style={themeStyles}
-    >
-      <div className={headerClasses}>
-        <div className={styles.decorativeElement1}></div>
-        <div className={styles.decorativeElement2}></div>
-        <div className={styles.decorativeElement3}></div>
-        <div className={styles.decorativeElement4}></div>
-        {isMobile && <div className={styles.decorativeElement5}></div>}
-        
-        <div className={fileIconClasses}>
+    <div style={cardStyle}>
+      {/* Decorative elements */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        width: '20px',
+        height: '20px',
+        background: 'rgba(255,255,255,0.2)',
+        borderRadius: '50%',
+        zIndex: 1
+      }} />
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        right: '40px',
+        width: '12px',
+        height: '12px',
+        background: 'rgba(255,255,255,0.1)',
+        borderRadius: '50%',
+        zIndex: 1
+      }} />
+
+      <div style={headerStyle}>
+        <div style={iconStyle}>
           {fileIcon}
         </div>
       </div>
 
-      <div className={contentClasses}>
-        <h3 className={titleClasses}>
+      <div style={contentStyle}>
+        <h3 style={titleStyle}>
           {file.originalName || 'Document sans nom'}
         </h3>
         
-        <div className={sizeClasses}>
-          <span className={styles.sizeEmoji}>📊</span>
+        <div style={sizeStyle}>
+          <span>📊</span>
           {formatFileSize(file.fileSize || 0)}
         </div>
 
         {error && (
-          <div className={styles.error}>
+          <div style={errorStyle}>
             {error}
           </div>
         )}
 
-        <div className={actionsClasses}>
+        <div style={actionsStyle}>
           <button
-            className={viewButtonClasses}
+            style={viewButtonStyle}
             onClick={handleView}
             disabled={loading}
+            onMouseOver={(e) => {
+              if (!loading) {
+                e.target.style.transform = 'translateY(-1px)';
+                e.target.style.boxShadow = `0 4px 12px ${theme.shadow}`;
+              }
+            }}
+            onMouseOut={(e) => {
+              e.target.style.transform = 'translateY(0)';
+              e.target.style.boxShadow = 'none';
+            }}
           >
             <Eye size={isMobile ? 16 : 20} />
             {loading ? 'Chargement...' : 'Visualiser'}
           </button>
           
           <button
-            className={downloadButtonClasses}
+            style={downloadButtonStyle}
             onClick={handleDownload}
             disabled={loading}
+            onMouseOver={(e) => {
+              if (!loading) {
+                e.target.style.backgroundColor = theme.color;
+                e.target.style.color = 'white';
+                e.target.style.transform = 'translateY(-1px)';
+              }
+            }}
+            onMouseOut={(e) => {
+              e.target.style.backgroundColor = 'transparent';
+              e.target.style.color = theme.color;
+              e.target.style.transform = 'translateY(0)';
+            }}
           >
             <Download size={isMobile ? 16 : 20} />
             {loading ? 'Chargement...' : 'Télécharger'}
@@ -386,38 +527,81 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
   
-  const containerClasses = [
-    styles.filesContainer,
-    styles[`filesContainer-${breakpoint}`],
-    isMobile ? styles.filesContainerMobile : '',
-  ].filter(Boolean).join(' ');
+  const containerStyle = {
+    padding: isMobile ? '16px' : '24px',
+    minHeight: '100vh',
+    backgroundColor: '#f8fafc'
+  };
 
-  const gridClasses = [
-    styles.grid,
-    styles[`grid-${breakpoint}`],
-  ].filter(Boolean).join(' ');
+  const gridStyle = {
+    display: 'grid',
+    gridTemplateColumns: isMobile 
+      ? '1fr' 
+      : 'repeat(auto-fill, minmax(320px, 1fr))',
+    gap: isMobile ? '16px' : '24px',
+    maxWidth: '1200px',
+    margin: '0 auto'
+  };
+
+  const loadingStyle = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '200px',
+    color: '#666'
+  };
+
+  const spinnerStyle = {
+    width: '40px',
+    height: '40px',
+    border: '3px solid #f3f3f3',
+    borderTop: '3px solid #3498db',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+    marginBottom: '16px'
+  };
 
   if (loading) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.loading}>
-          <div className={styles.spinner}></div>
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div style={spinnerStyle} />
           Chargement des fichiers...
         </div>
+        <style>
+          {`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}
+        </style>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.errorState}>
-          <div className={styles.errorIcon}>⚠️</div>
-          <div>{error}</div>
+      <div style={containerStyle}>
+        <div style={{
+          ...loadingStyle,
+          color: '#e74c3c'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+          <div style={{ marginBottom: '16px' }}>{error}</div>
           {onRetry && (
             <button 
-              className={`${styles.retryButton} ${isMobile ? styles.retryButtonMobile : ''}`}
               onClick={onRetry}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: '#3498db',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
             >
               Réessayer
             </button>
@@ -429,28 +613,18 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
 
   if (files.length === 0) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.emptyState}>
-          <div className={styles.emptyIcon}>📄</div>
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📄</div>
           <div>Aucun fichier disponible</div>
         </div>
       </div>
     );
   }
 
-  if (isMobile) {
-    return (
-      <div className={containerClasses}>
-        {files.map(file => (
-          <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className={`${containerClasses} ${styles.filesContainerStretch}`}>
-      <div className={gridClasses}>
+    <div style={containerStyle}>
+      <div style={gridStyle}>
         {files.map(file => (
           <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
         ))}
@@ -459,105 +633,87 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   );
 };
 
-// Enhanced demo component with cloud server integration
-const CloudServerFileDemo = () => {
+// Enhanced demo component with production-ready file loading
+const ProductionFileDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Cloud server sample files with Cloudinary URLs
-  const sampleCloudFiles = [
-    {
-      _id: '674a1b2c3d4e5f6789012345',
-      originalName: 'Cours_Algorithmes_2024.pdf',
-      fileName: '1734567890123-Cours_Algorithmes_2024',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567890123-Cours_Algorithmes_2024',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567890/university-archive/pdfs/1734567890123-Cours_Algorithmes_2024.pdf',
-      fileSize: 2048576,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012346',
-      originalName: 'TP_Base_de_Donnees.pdf',
-      fileName: '1734567891234-TP_Base_de_Donnees',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567891234-TP_Base_de_Donnees',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567891/university-archive/pdfs/1734567891234-TP_Base_de_Donnees.pdf',
-      fileSize: 1572864,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012347',
-      originalName: 'Examen_Final_Mathematiques.pdf',
-      fileName: '1734567892345-Examen_Final_Mathematiques',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567892345-Examen_Final_Mathematiques',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567892/university-archive/pdfs/1734567892345-Examen_Final_Mathematiques.pdf',
-      fileSize: 3145728,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012348',
-      originalName: 'TD_Analyse_Numerique.pdf',
-      fileName: '1734567893456-TD_Analyse_Numerique',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567893456-TD_Analyse_Numerique',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567893/university-archive/pdfs/1734567893456-TD_Analyse_Numerique.pdf',
-      fileSize: 987654,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012349',
-      originalName: 'Projet_Fin_Etude_Guide.pdf',
-      fileName: '1734567894567-Projet_Fin_Etude_Guide',
-      filePath: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      cloudinaryPublicId: 'university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide',
-      cloudinaryUrl: 'https://res.cloudinary.com/your-cloud-name/raw/upload/v1734567894/university-archive/pdfs/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      fileSize: 5242880,
-      mimeType: 'application/pdf',
-      storageProvider: 'cloudinary'
-    }
-  ];
+  // Production API base URL
+  const apiBaseUrl = 'https://archive-mi73.onrender.com';
 
-  // Simulate loading from cloud server
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setCurrentFiles(sampleCloudFiles);
+  // Load files from production API
+  const loadFiles = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      console.log('Loading files from:', `${apiBaseUrl}/api/files`);
+      
+      const response = await fetch(`${apiBaseUrl}/api/files?limit=20`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        mode: 'cors',
+        credentials: 'omit'
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Loaded files:', data);
+      
+      // Handle both paginated and direct array responses
+      const files = data.files || data;
+      
+      if (Array.isArray(files)) {
+        setCurrentFiles(files);
+      } else {
+        throw new Error('Invalid response format');
+      }
+      
+    } catch (err) {
+      console.error('Error loading files:', err);
+      setError(`Erreur de chargement: ${err.message}`);
+      
+      // Fallback to sample files for demo
+      const sampleFiles = [
+        {
+          _id: '674a1b2c3d4e5f6789012345',
+          originalName: 'Cours_Algorithmes_2024.pdf',
+          cloudinaryUrl: 'https://res.cloudinary.com/demo/raw/upload/v1234567890/sample.pdf',
+          fileSize: 2048576,
+          mimeType: 'application/pdf'
+        },
+        {
+          _id: '674a1b2c3d4e5f6789012346',
+          originalName: 'TP_Base_de_Donnees.pdf',
+          cloudinaryUrl: 'https://res.cloudinary.com/demo/raw/upload/v1234567891/sample2.pdf',
+          fileSize: 1572864,
+          mimeType: 'application/pdf'
+        }
+      ];
+      
+      setCurrentFiles(sampleFiles);
+    } finally {
       setLoading(false);
-    }, 2000);
+    }
+  };
 
-    return () => clearTimeout(timer);
+  useEffect(() => {
+    loadFiles();
   }, []);
 
   const handleRetry = () => {
-    setLoading(true);
-    setError(null);
-    setCurrentFiles([]);
-    
-    // Simulate retry with potential error
-    setTimeout(() => {
-      const success = Math.random() > 0.3; // 70% success rate
-      
-      if (success) {
-        setCurrentFiles(sampleCloudFiles);
-        setLoading(false);
-      } else {
-        setError('Impossible de se connecter au serveur cloud. Vérifiez votre connexion internet.');
-        setLoading(false);
-      }
-    }, 1500);
+    loadFiles();
   };
 
-  // API Configuration - You should set this to your actual server URL
-  const apiBaseUrl = process.env.REACT_APP_API_URL || 'https://archive-mi73.onrender.com';
-
   return (
-    <div className={styles.demoContainer}>
+    <div>
       <FilesPage 
         files={currentFiles} 
         loading={loading} 
@@ -569,4 +725,4 @@ const CloudServerFileDemo = () => {
   );
 };
 
-export default CloudServerFileDemo;
+export default ProductionFileDemo;
