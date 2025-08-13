@@ -1,70 +1,89 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet } from 'lucide-react';
-import styles from './FileCard.module.css';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle } from 'lucide-react';
+
+// Enhanced API Configuration for production
+const API_CONFIG = {
+  getBaseURL: () => {
+    // Check if we're in browser environment
+    if (typeof window === 'undefined') return '';
+    
+    // For localhost development
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return 'http://localhost:5000';
+    }
+    
+    // For production - try environment variable first, then use your production API URL
+    const envApiUrl = process.env.REACT_APP_API_URL || process.env.VITE_BACKEND_URL;
+    
+    if (envApiUrl) {
+      return envApiUrl;
+    }
+    
+    // Fallback to your known production API URL
+    return 'https://archive-mi73.onrender.com';
+  },
+  
+  getURL: (path) => {
+    const baseURL = API_CONFIG.getBaseURL();
+    if (!baseURL) return path;
+    
+    // Ensure path starts with /
+    const cleanPath = path.startsWith('/') ? path : '/' + path;
+    return `${baseURL}${cleanPath}`;
+  },
+
+  // Test if the API is accessible
+  testConnection: async () => {
+    try {
+      const baseURL = API_CONFIG.getBaseURL();
+      const response = await fetch(`${baseURL}/api/health`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('API connection test failed:', error);
+      return false;
+    }
+  }
+};
 
 // Color schemes for different file types/states
 const fileThemes = [
   { 
     gradient: 'linear-gradient(135deg, #ff4757 0%, #ff6b7a 40%, #ff3838 100%)',
     color: '#ff4757',
-    accentGradient: 'linear-gradient(45deg, #ff4757, #ff6b7a, #ff3838)',
     shadow: 'rgba(255, 71, 87, 0.4)',
-    name: 'red'
   },
   { 
     gradient: 'linear-gradient(135deg, #5352ed 0%, #706fd3 40%, #40407a 100%)',
     color: '#5352ed',
-    accentGradient: 'linear-gradient(45deg, #5352ed, #706fd3, #40407a)',
     shadow: 'rgba(83, 82, 237, 0.4)',
-    name: 'purple'
   },
   { 
     gradient: 'linear-gradient(135deg, #00d2d3 0%, #54a0ff 40%, #2f3542 100%)',
     color: '#00d2d3',
-    accentGradient: 'linear-gradient(45deg, #00d2d3, #54a0ff, #2f3542)',
     shadow: 'rgba(0, 210, 211, 0.4)',
-    name: 'cyan'
   },
   { 
     gradient: 'linear-gradient(135deg, #5f27cd 0%, #a55eea 40%, #341f97 100%)',
     color: '#5f27cd',
-    accentGradient: 'linear-gradient(45deg, #5f27cd, #a55eea, #341f97)',
     shadow: 'rgba(95, 39, 205, 0.4)',
-    name: 'violet'
   },
   { 
     gradient: 'linear-gradient(135deg, #00d8d6 0%, #01a3a4 40%, #0abde3 100%)',
     color: '#00d8d6',
-    accentGradient: 'linear-gradient(45deg, #00d8d6, #01a3a4, #0abde3)',
     shadow: 'rgba(0, 216, 214, 0.4)',
-    name: 'teal'
   },
   { 
     gradient: 'linear-gradient(135deg, #feca57 0%, #ff9ff3 40%, #48dbfb 100%)',
     color: '#feca57',
-    accentGradient: 'linear-gradient(45deg, #feca57, #ff9ff3, #48dbfb)',
     shadow: 'rgba(254, 202, 87, 0.4)',
-    name: 'rainbow'
   }
 ];
-
-// API Configuration - Updated for local storage
-const API_CONFIG = {
-  getBaseURL: () => {
-    // For development
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return 'http://localhost:5000';
-    }
-    
-    // For production - use environment variable or current origin
-    return process.env.REACT_APP_API_URL || window.location.origin;
-  },
-  
-  getURL: (path) => {
-    const baseURL = API_CONFIG.getBaseURL();
-    return `${baseURL}${path.startsWith('/') ? path : '/' + path}`;
-  }
-};
 
 // Enhanced responsive breakpoints hook
 const useBreakpoints = () => {
@@ -164,23 +183,16 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// Enhanced FileCard with local storage support
+// Enhanced FileCard with improved PDF handling
 export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
   const fileIcon = getFileIcon(file.originalName || 'file.txt', breakpoint);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [debugInfo, setDebugInfo] = useState(null);
   
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
-  const isTablet = breakpoint === 'tablet';
-  const isDesktop = ['desktop-small', 'desktop'].includes(breakpoint);
-
-  // Get the API base URL - use prop, then fallback to auto-detection
-  const getApiUrl = (endpoint) => {
-    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
-    return `${baseUrl}${endpoint}`;
-  };
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -190,214 +202,305 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Updated view handler for local storage
+  // Enhanced URL generation with fallbacks
+  const getFileURL = (type = 'view') => {
+    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
+    
+    // Priority order for different URL types:
+    if (type === 'view') {
+      // For viewing PDFs in browser
+      if (file.viewUrl && file.viewUrl.startsWith('http')) {
+        return file.viewUrl;
+      }
+      if (file.directUrl && file.directUrl.startsWith('http')) {
+        return file.directUrl;
+      }
+      if (file.fileName) {
+        return `${baseUrl}/uploads/${file.fileName}`;
+      }
+      if (file._id) {
+        return `${baseUrl}/api/files/${file._id}/view`;
+      }
+      if (file.filePath) {
+        return file.filePath.startsWith('http') ? file.filePath : `${baseUrl}${file.filePath}`;
+      }
+    } else if (type === 'download') {
+      // For downloading files
+      if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
+        return file.downloadUrl;
+      }
+      if (file._id) {
+        return `${baseUrl}/api/files/${file._id}/download`;
+      }
+      if (file.fileName) {
+        return `${baseUrl}/uploads/${file.fileName}`;
+      }
+    }
+    
+    return null;
+  };
+
+  // Enhanced view handler with multiple fallback strategies
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Priority order for viewing files:
-      // 1. Use direct file path if it's a full URL (for backward compatibility)
-      // 2. Use API view endpoint for local files
-      // 3. Fallback to viewUrl if provided
+      const viewUrl = getFileURL('view');
       
-      let viewUrl;
-      
-      if (file.viewUrl && (file.viewUrl.startsWith('http') || file.viewUrl.startsWith('/uploads'))) {
-        // Direct URL to file (local storage)
-        viewUrl = file.viewUrl.startsWith('http') ? file.viewUrl : getApiUrl(file.viewUrl);
-      } else if (file.filePath && file.filePath.startsWith('/uploads')) {
-        // Relative path to uploaded file
-        viewUrl = getApiUrl(file.filePath);
-      } else if (file._id) {
-        // Use API view endpoint
-        viewUrl = getApiUrl(`/api/files/${file._id}/view`);
-      } else {
-        throw new Error('No valid file path found');
+      if (!viewUrl) {
+        throw new Error('Aucune URL de visualisation disponible');
       }
 
-      console.log('Opening file at:', viewUrl);
+      console.log('🔍 Attempting to view file:', {
+        originalName: file.originalName,
+        fileId: file._id,
+        viewUrl,
+        fileName: file.fileName
+      });
+
+      setDebugInfo({
+        viewUrl,
+        method: 'Direct browser open',
+        timestamp: new Date().toISOString()
+      });
+
+      // First, try to test if the URL is accessible
+      try {
+        const testResponse = await fetch(viewUrl, {
+          method: 'HEAD',
+          credentials: 'include'
+        });
+        
+        console.log('📋 URL accessibility test:', {
+          url: viewUrl,
+          status: testResponse.status,
+          ok: testResponse.ok,
+          headers: Object.fromEntries(testResponse.headers.entries())
+        });
+        
+        if (!testResponse.ok) {
+          console.warn('⚠️ URL test failed, but will try to open anyway');
+        }
+      } catch (testError) {
+        console.warn('⚠️ URL test failed:', testError.message, 'but will try to open anyway');
+      }
+
+      // Open the PDF in a new tab
+      const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
       
-      // For PDFs, open in new tab to use browser's PDF viewer
-      window.open(viewUrl, '_blank');
+      if (!newWindow) {
+        // Popup blocked, try alternative method
+        const link = document.createElement('a');
+        link.href = viewUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
       
     } catch (err) {
-      console.error('Error viewing file:', err);
-      setError('Impossible de visualiser le fichier');
+      console.error('❌ Error viewing file:', err);
+      setError(`Erreur lors de la visualisation: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Updated download handler for local storage
+  // Enhanced download handler
   const handleDownload = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Priority order for downloading files:
-      // 1. Use API download endpoint (handles proper headers)
-      // 2. Use direct downloadUrl if provided
-      // 3. Fallback to direct file path
+      const downloadUrl = getFileURL('download');
       
-      let downloadUrl;
-      
-      if (file._id) {
-        // Use API download endpoint (recommended - handles proper headers)
-        downloadUrl = getApiUrl(`/api/files/${file._id}/download`);
-      } else if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
-        // Direct download URL
-        downloadUrl = file.downloadUrl;
-      } else if (file.filePath) {
-        // Direct file path
-        downloadUrl = file.filePath.startsWith('http') ? file.filePath : getApiUrl(file.filePath);
-      } else {
-        throw new Error('No valid download path found');
+      if (!downloadUrl) {
+        throw new Error('Aucune URL de téléchargement disponible');
       }
 
-      console.log('Downloading file from:', downloadUrl);
-      
+      console.log('⬇️ Downloading file:', {
+        originalName: file.originalName,
+        downloadUrl
+      });
+
       // Create a temporary link for download
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = file.originalName || 'document.pdf';
+      link.style.display = 'none';
+      
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
     } catch (err) {
-      console.error('Error downloading file:', err);
-      setError('Impossible de télécharger le fichier');
+      console.error('❌ Error downloading file:', err);
+      setError(`Erreur lors du téléchargement: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Create CSS custom properties for the theme
-  const themeStyles = {
-    '--theme-gradient': theme.gradient,
-    '--theme-color': theme.color,
-    '--theme-shadow': theme.shadow,
+  // Styles
+  const containerStyles = {
+    background: 'linear-gradient(145deg, #ffffff 0%, #f8fafc 100%)',
+    border: '1px solid rgba(0,0,0,0.1)',
+    borderRadius: '16px',
+    padding: '1.5rem',
+    boxShadow: `0 8px 32px ${theme.shadow}`,
+    transition: 'all 0.3s ease',
+    cursor: 'pointer',
+    position: 'relative',
+    overflow: 'hidden',
+    minHeight: '200px',
+    display: 'flex',
+    flexDirection: 'column',
   };
 
-  const containerClasses = [
-    styles.container,
-    styles[`container-${breakpoint}`],
-    isMobile ? styles.mobile : '',
-    isTablet ? styles.tablet : '',
-    isDesktop ? styles.desktop : '',
-  ].filter(Boolean).join(' ');
+  const headerStyles = {
+    background: theme.gradient,
+    borderRadius: '12px',
+    padding: '1rem',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: '1rem',
+    color: 'white',
+    minHeight: '80px',
+  };
 
-  const headerClasses = [
-    styles.header,
-    styles[`header-${breakpoint}`],
-    isMobile ? styles.headerMobile : '',
-  ].filter(Boolean).join(' ');
+  const titleStyles = {
+    fontSize: isMobile ? '0.875rem' : '1rem',
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: '0.5rem',
+    lineHeight: '1.4',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+  };
 
-  const fileIconClasses = [
-    styles.fileIcon,
-    isMobile ? styles.fileIconMobile : '',
-  ].filter(Boolean).join(' ');
+  const sizeStyles = {
+    fontSize: '0.75rem',
+    color: '#6b7280',
+    marginBottom: '1rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.25rem',
+  };
 
-  const contentClasses = [
-    styles.content,
-    styles[`content-${breakpoint}`],
-    isMobile ? styles.contentMobile : '',
-  ].filter(Boolean).join(' ');
+  const buttonsContainerStyles = {
+    display: 'flex',
+    gap: '0.5rem',
+    marginTop: 'auto',
+  };
 
-  const titleClasses = [
-    styles.title,
-    styles[`title-${breakpoint}`],
-    isMobile ? styles.titleMobile : '',
-  ].filter(Boolean).join(' ');
+  const buttonBaseStyles = {
+    flex: 1,
+    padding: '0.5rem 1rem',
+    borderRadius: '8px',
+    border: 'none',
+    fontWeight: '500',
+    fontSize: '0.875rem',
+    cursor: loading ? 'not-allowed' : 'pointer',
+    transition: 'all 0.2s ease',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    opacity: loading ? 0.6 : 1,
+  };
 
-  const sizeClasses = [
-    styles.size,
-    styles[`size-${breakpoint}`],
-    isMobile ? styles.sizeMobile : '',
-  ].filter(Boolean).join(' ');
+  const viewButtonStyles = {
+    ...buttonBaseStyles,
+    background: theme.gradient,
+    color: 'white',
+  };
 
-  const actionsClasses = [
-    styles.actions,
-    isMobile ? styles.actionsMobile : '',
-  ].filter(Boolean).join(' ');
+  const downloadButtonStyles = {
+    ...buttonBaseStyles,
+    background: 'rgba(0,0,0,0.05)',
+    color: '#374151',
+    border: '1px solid rgba(0,0,0,0.1)',
+  };
 
-  const viewButtonClasses = [
-    styles.baseButton,
-    styles.viewButton,
-    styles[`button-${breakpoint}`],
-    isMobile ? styles.buttonMobile : '',
-    loading ? styles.loading : '',
-  ].filter(Boolean).join(' ');
+  const errorStyles = {
+    background: 'rgba(239, 68, 68, 0.1)',
+    color: '#dc2626',
+    padding: '0.5rem',
+    borderRadius: '6px',
+    fontSize: '0.75rem',
+    marginBottom: '0.5rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.25rem',
+  };
 
-  const downloadButtonClasses = [
-    styles.baseButton,
-    styles.downloadButton,
-    styles[`button-${breakpoint}`],
-    isMobile ? styles.buttonMobile : '',
-    loading ? styles.loading : '',
-  ].filter(Boolean).join(' ');
+  const debugStyles = {
+    background: 'rgba(59, 130, 246, 0.1)',
+    color: '#1d4ed8',
+    padding: '0.5rem',
+    borderRadius: '6px',
+    fontSize: '0.625rem',
+    marginBottom: '0.5rem',
+    fontFamily: 'monospace',
+    wordBreak: 'break-all',
+  };
 
   return (
-    <div 
-      className={containerClasses}
-      style={themeStyles}
-    >
-      <div className={headerClasses}>
-        <div className={styles.decorativeElement1}></div>
-        <div className={styles.decorativeElement2}></div>
-        <div className={styles.decorativeElement3}></div>
-        <div className={styles.decorativeElement4}></div>
-        {isMobile && <div className={styles.decorativeElement5}></div>}
-        
-        <div className={fileIconClasses}>
-          {fileIcon}
-        </div>
+    <div style={containerStyles}>
+      <div style={headerStyles}>
+        {fileIcon}
       </div>
 
-      <div className={contentClasses}>
-        <h3 className={titleClasses}>
+      <div style={{ flex: 1 }}>
+        <h3 style={titleStyles}>
           {file.originalName || 'Document sans nom'}
         </h3>
         
-        <div className={sizeClasses}>
-          <span className={styles.sizeEmoji}>📊</span>
+        <div style={sizeStyles}>
+          <span>📊</span>
           {formatFileSize(file.fileSize || 0)}
         </div>
 
-        {/* Add file info for debugging in development */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className={styles.debugInfo}>
-            <small>
-              Storage: {file.storageProvider || 'local'} | 
-              Path: {file.filePath || 'N/A'}
-            </small>
+        {/* Development debug info */}
+        {process.env.NODE_ENV === 'development' && debugInfo && (
+          <div style={debugStyles}>
+            <div>URL: {debugInfo.viewUrl}</div>
+            <div>Method: {debugInfo.method}</div>
           </div>
         )}
 
+        {/* Error display */}
         {error && (
-          <div className={styles.error}>
+          <div style={errorStyles}>
+            <AlertCircle size={16} />
             {error}
           </div>
         )}
 
-        <div className={actionsClasses}>
+        {/* Action buttons */}
+        <div style={buttonsContainerStyles}>
           <button
-            className={viewButtonClasses}
+            style={viewButtonStyles}
             onClick={handleView}
             disabled={loading}
           >
-            <Eye size={isMobile ? 16 : 20} />
-            {loading ? 'Chargement...' : 'Visualiser'}
+            <Eye size={isMobile ? 16 : 18} />
+            {loading ? 'Ouverture...' : 'Visualiser'}
           </button>
           
           <button
-            className={downloadButtonClasses}
+            style={downloadButtonStyles}
             onClick={handleDownload}
             disabled={loading}
           >
-            <Download size={isMobile ? 16 : 20} />
-            {loading ? 'Chargement...' : 'Télécharger'}
+            <Download size={isMobile ? 16 : 18} />
+            {loading ? 'Téléchargement...' : 'Télécharger'}
           </button>
         </div>
       </div>
@@ -405,43 +508,175 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   );
 };
 
-// Enhanced Files Page Component with local storage support
+// Enhanced Files Page Component
 export const FilesPage = ({ files = [], loading = false, error = null, onRetry, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
-  
-  const containerClasses = [
-    styles.filesContainer,
-    styles[`filesContainer-${breakpoint}`],
-    isMobile ? styles.filesContainerMobile : '',
-  ].filter(Boolean).join(' ');
+  const [apiStatus, setApiStatus] = useState('checking');
 
-  const gridClasses = [
-    styles.grid,
-    styles[`grid-${breakpoint}`],
-  ].filter(Boolean).join(' ');
+  useEffect(() => {
+    // Test API connection on mount
+    const testAPI = async () => {
+      try {
+        const isConnected = await API_CONFIG.testConnection();
+        setApiStatus(isConnected ? 'connected' : 'disconnected');
+      } catch (error) {
+        console.error('API test failed:', error);
+        setApiStatus('error');
+      }
+    };
+
+    testAPI();
+  }, []);
+
+  const containerStyles = {
+    padding: '1rem',
+    maxWidth: '1200px',
+    margin: '0 auto',
+  };
+
+  const gridStyles = {
+    display: 'grid',
+    gridTemplateColumns: isMobile 
+      ? '1fr' 
+      : 'repeat(auto-fill, minmax(300px, 1fr))',
+    gap: '1.5rem',
+    marginTop: '1rem',
+  };
+
+  const loadingStyles = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '3rem',
+    color: '#6b7280',
+  };
+
+  const spinnerStyles = {
+    width: '40px',
+    height: '40px',
+    border: '4px solid #f3f4f6',
+    borderTop: '4px solid #3b82f6',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+    marginBottom: '1rem',
+  };
+
+  const errorStateStyles = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '3rem',
+    background: 'rgba(239, 68, 68, 0.05)',
+    borderRadius: '12px',
+    border: '1px solid rgba(239, 68, 68, 0.2)',
+  };
+
+  const emptyStateStyles = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '3rem',
+    color: '#6b7280',
+    background: 'rgba(0, 0, 0, 0.02)',
+    borderRadius: '12px',
+    border: '1px solid rgba(0, 0, 0, 0.1)',
+  };
+
+  const statusBadgeStyles = {
+    padding: '0.5rem 1rem',
+    borderRadius: '20px',
+    fontSize: '0.75rem',
+    fontWeight: '500',
+    marginBottom: '1rem',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+  };
+
+  const getStatusBadgeStyles = () => {
+    switch (apiStatus) {
+      case 'connected':
+        return {
+          ...statusBadgeStyles,
+          background: 'rgba(34, 197, 94, 0.1)',
+          color: '#059669',
+        };
+      case 'disconnected':
+      case 'error':
+        return {
+          ...statusBadgeStyles,
+          background: 'rgba(239, 68, 68, 0.1)',
+          color: '#dc2626',
+        };
+      default:
+        return {
+          ...statusBadgeStyles,
+          background: 'rgba(156, 163, 175, 0.1)',
+          color: '#6b7280',
+        };
+    }
+  };
+
+  const getStatusText = () => {
+    switch (apiStatus) {
+      case 'connected':
+        return '✅ API Connectée';
+      case 'disconnected':
+        return '⚠️ API Déconnectée';
+      case 'error':
+        return '❌ Erreur API';
+      default:
+        return '🔄 Test API...';
+    }
+  };
 
   if (loading) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.loading}>
-          <div className={styles.spinner}></div>
-          Chargement des fichiers...
+      <div style={containerStyles}>
+        <div style={loadingStyles}>
+          <div style={spinnerStyles}></div>
+          <div>Chargement des fichiers...</div>
         </div>
+        <style jsx>{`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.errorState}>
-          <div className={styles.errorIcon}>⚠️</div>
-          <div>{error}</div>
+      <div style={containerStyles}>
+        <div style={errorStateStyles}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚠️</div>
+          <div style={{ marginBottom: '1rem', textAlign: 'center', color: '#dc2626' }}>
+            {error}
+          </div>
+          <div style={getStatusBadgeStyles()}>
+            {getStatusText()}
+          </div>
           {onRetry && (
             <button 
-              className={`${styles.retryButton} ${isMobile ? styles.retryButtonMobile : ''}`}
               onClick={onRetry}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'background 0.2s ease',
+              }}
+              onMouseOver={(e) => e.target.style.background = '#2563eb'}
+              onMouseOut={(e) => e.target.style.background = '#3b82f6'}
             >
               Réessayer
             </button>
@@ -453,153 +688,206 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
 
   if (files.length === 0) {
     return (
-      <div className={containerClasses}>
-        <div className={styles.emptyState}>
-          <div className={styles.emptyIcon}>📄</div>
+      <div style={containerStyles}>
+        <div style={emptyStateStyles}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
           <div>Aucun fichier disponible</div>
+          <div style={getStatusBadgeStyles()}>
+            {getStatusText()}
+          </div>
         </div>
       </div>
     );
   }
 
-  if (isMobile) {
-    return (
-      <div className={containerClasses}>
-        {files.map(file => (
-          <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className={`${containerClasses} ${styles.filesContainerStretch}`}>
-      <div className={gridClasses}>
+    <div style={containerStyles}>
+      {/* API Status indicator */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
+        <div style={getStatusBadgeStyles()}>
+          {getStatusText()}
+        </div>
+      </div>
+
+      <div style={gridStyles}>
         {files.map(file => (
           <FileCard key={file._id} file={file} apiBaseUrl={apiBaseUrl} />
         ))}
       </div>
+      
+      <style jsx>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 };
 
-// Updated demo component with local storage files
-const LocalStorageFileDemo = () => {
+// Demo component with production-ready PDF files
+const ProductionPDFDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Local storage sample files (as they would come from your API)
-  const sampleLocalFiles = [
+  // Updated sample files based on your actual API response
+  const sampleProductionFiles = [
     {
-      _id: '674a1b2c3d4e5f6789012345',
-      originalName: 'Cours_Algorithmes_2024.pdf',
-      fileName: '1734567890123-Cours_Algorithmes_2024.pdf',
-      filePath: '/uploads/1734567890123-Cours_Algorithmes_2024.pdf',
-      fileSize: 2048576,
-      mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-15T10:30:00.000Z',
-      viewUrl: '/uploads/1734567890123-Cours_Algorithmes_2024.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012345/download'
+      _id: "689b4903c49b87ce3ab38db3",
+      originalName: "TP1-.pdf",
+      fileName: "1755007235029-854920657.pdf",
+      filePath: "uploads/1755007235029-854920657.pdf",
+      fileSize: 93110,
+      mimeType: "application/pdf",
+      storageProvider: "local",
+      uploadedAt: "2025-08-12T14:00:35.779Z",
+      viewUrl: "https://archive-mi73.onrender.com/uploads/1755007235029-854920657.pdf",
+      downloadUrl: "https://archive-mi73.onrender.com/api/files/689b4903c49b87ce3ab38db3/download",
+      fileType: "pdf",
+      semester: {
+        _id: "6898bf64e823136d8dc4c573",
+        name: "S1",
+        displayName: "Semestre 1"
+      },
+      type: {
+        _id: "689a5bb76f501aa7a841f638",
+        name: "cours",
+        displayName: "Cours"
+      },
+      subject: {
+        _id: "689a5bb76f501aa7a841f63b",
+        name: "Algebre"
+      },
+      year: {
+        _id: "689a5bb86f501aa7a841f63e",
+        year: "2021"
+      }
     },
     {
-      _id: '674a1b2c3d4e5f6789012346',
-      originalName: 'TP_Base_de_Donnees.pdf',
-      fileName: '1734567891234-TP_Base_de_Donnees.pdf',
-      filePath: '/uploads/1734567891234-TP_Base_de_Donnees.pdf',
-      fileSize: 1572864,
-      mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-16T14:20:00.000Z',
-      viewUrl: '/uploads/1734567891234-TP_Base_de_Donnees.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012346/download'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012347',
-      originalName: 'Examen_Final_Mathematiques.pdf',
-      fileName: '1734567892345-Examen_Final_Mathematiques.pdf',
-      filePath: '/uploads/1734567892345-Examen_Final_Mathematiques.pdf',
-      fileSize: 3145728,
-      mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-17T09:15:00.000Z',
-      viewUrl: '/uploads/1734567892345-Examen_Final_Mathematiques.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012347/download'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012348',
-      originalName: 'TD_Analyse_Numerique.pdf',
-      fileName: '1734567893456-TD_Analyse_Numerique.pdf',
-      filePath: '/uploads/1734567893456-TD_Analyse_Numerique.pdf',
-      fileSize: 987654,
-      mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-18T16:45:00.000Z',
-      viewUrl: '/uploads/1734567893456-TD_Analyse_Numerique.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012348/download'
-    },
-    {
-      _id: '674a1b2c3d4e5f6789012349',
-      originalName: 'Projet_Fin_Etude_Guide.pdf',
-      fileName: '1734567894567-Projet_Fin_Etude_Guide.pdf',
-      filePath: '/uploads/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      fileSize: 5242880,
-      mimeType: 'application/pdf',
-      storageProvider: 'local',
-      uploadedAt: '2024-01-19T11:30:00.000Z',
-      viewUrl: '/uploads/1734567894567-Projet_Fin_Etude_Guide.pdf',
-      downloadUrl: '/api/files/674a1b2c3d4e5f6789012349/download'
+      _id: "689b4903c49b87ce3ab38db4",
+      originalName: "Arithmetique dans Z.pdf",
+      fileName: "1755007235030-854920658.pdf",
+      filePath: "uploads/1755007235030-854920658.pdf",
+      fileSize: 104920,
+      mimeType: "application/pdf",
+      storageProvider: "local",
+      uploadedAt: "2025-08-12T15:30:20.123Z",
+      viewUrl: "https://archive-mi73.onrender.com/uploads/1755007235030-854920658.pdf",
+      downloadUrl: "https://archive-mi73.onrender.com/api/files/689b4903c49b87ce3ab38db4/download",
+      fileType: "pdf",
+      semester: {
+        _id: "6898bf64e823136d8dc4c573",
+        name: "S1",
+        displayName: "Semestre 1"
+      },
+      type: {
+        _id: "689a5bb76f501aa7a841f638",
+        name: "cours",
+        displayName: "Cours"
+      },
+      subject: {
+        _id: "689a5bb76f501aa7a841f63b",
+        name: "Mathematiques"
+      },
+      year: {
+        _id: "689a5bb86f501aa7a841f63e",
+        year: "2021"
+      }
     }
   ];
 
-  // Simulate loading from local storage server
+  // Simulate API loading
   useEffect(() => {
     const timer = setTimeout(() => {
-      setCurrentFiles(sampleLocalFiles);
+      // Simulate occasional API errors for testing
+      const success = Math.random() > 0.1; // 90% success rate
+      
+      if (success) {
+        setCurrentFiles(sampleProductionFiles);
+        setError(null);
+      } else {
+        setError('Impossible de se connecter au serveur. Vérifiez que https://archive-mi73.onrender.com est accessible.');
+      }
       setLoading(false);
     }, 1500);
 
     return () => clearTimeout(timer);
   }, []);
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
     setLoading(true);
     setError(null);
     setCurrentFiles([]);
     
-    // Simulate retry
-    setTimeout(() => {
-      const success = Math.random() > 0.2; // 80% success rate
+    // Test actual API connection
+    try {
+      const isConnected = await API_CONFIG.testConnection();
       
-      if (success) {
-        setCurrentFiles(sampleLocalFiles);
+      setTimeout(() => {
+        if (isConnected) {
+          setCurrentFiles(sampleProductionFiles);
+        } else {
+          setError('Le serveur API ne répond pas. Vérifiez votre connexion internet et que le serveur https://archive-mi73.onrender.com est en ligne.');
+        }
         setLoading(false);
-      } else {
-        setError('Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+      }, 1000);
+    } catch (err) {
+      setTimeout(() => {
+        setError(`Erreur de connexion: ${err.message}`);
         setLoading(false);
-      }
-    }, 1500);
+      }, 1000);
+    }
   };
 
-  // API Configuration - Set this to your actual server URL
-  const apiBaseUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
-
   return (
-    <div className={styles.demoContainer}>
-      <div className={styles.demoHeader}>
-        <h2>📚 Archive Universitaire - Stockage Local</h2>
-        <p>Système de gestion de fichiers avec stockage local sécurisé</p>
+    <div style={{ 
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      padding: '2rem 1rem'
+    }}>
+      <div style={{
+        maxWidth: '1200px',
+        margin: '0 auto',
+        background: 'white',
+        borderRadius: '20px',
+        overflow: 'hidden',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.1)'
+      }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          padding: '2rem',
+          color: 'white',
+          textAlign: 'center'
+        }}>
+          <h1 style={{ margin: 0, fontSize: '2rem', marginBottom: '0.5rem' }}>
+            📚 Archive Universitaire
+          </h1>
+          <p style={{ margin: 0, opacity: 0.9, fontSize: '1.1rem' }}>
+            Système de gestion de fichiers avec stockage local - Version Production
+          </p>
+          <div style={{
+            background: 'rgba(255,255,255,0.2)',
+            padding: '0.5rem 1rem',
+            borderRadius: '20px',
+            marginTop: '1rem',
+            display: 'inline-block',
+            fontSize: '0.875rem'
+          }}>
+            API: {API_CONFIG.getBaseURL()}
+          </div>
+        </div>
+        
+        <FilesPage 
+          files={currentFiles} 
+          loading={loading} 
+          error={error}
+          onRetry={handleRetry}
+          apiBaseUrl={API_CONFIG.getBaseURL()}
+        />
       </div>
-      <FilesPage 
-        files={currentFiles} 
-        loading={loading} 
-        error={error}
-        onRetry={handleRetry}
-        apiBaseUrl={apiBaseUrl}
-      />
     </div>
   );
 };
 
-export default LocalStorageFileDemo;
+export default ProductionPDFDemo;

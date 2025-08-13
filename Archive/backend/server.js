@@ -20,7 +20,7 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('📁 Created uploads directory');
 }
 
-// Security middleware
+// Security middleware - FIXED for PDF serving
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
@@ -28,13 +28,15 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for PDF.js
+      imgSrc: ["'self'", "data:", "https:", "blob:"], // Allow blob URLs for PDFs
       connectSrc: ["'self'", "https:"],
       fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      frameSrc: ["'self'"],
+      objectSrc: ["'self'", "blob:"], // Allow objects for PDF embedding
+      mediaSrc: ["'self'", "blob:"],
+      frameSrc: ["'self'", "blob:"], // Allow frames for PDF viewing
+      workerSrc: ["'self'", "blob:"], // Allow workers for PDF.js
+      childSrc: ["'self'", "blob:"], // Allow child contexts for PDF.js
     },
   },
 }));
@@ -56,23 +58,24 @@ const uploadLimiter = rateLimit({
   message: 'Too many upload attempts, please try again later.',
 });
 
-// CORS configuration
+// CORS configuration - FIXED
 const corsOptions = {
   origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
-   const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:3001',
-  'https://www.larchive.tech',
-  'https://larchive.tech',
-  'https://archive-h7evw65o2-sidi110s-projects.vercel.app', // Your Vercel frontend
-  /\.vercel\.app$/,
-  /\.netlify\.app$/,
-  /\.herokuapp\.com$/,
-  /\.render\.com$/,
-];
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:3001',
+      'https://www.larchive.tech',
+      'https://larchive.tech',
+      'https://archive-h7evw65o2-sidi110s-projects.vercel.app',
+      /\.vercel\.app$/,
+      /\.netlify\.app$/,
+      /\.herokuapp\.com$/,
+      /\.render\.com$/,
+    ];
     
     const isAllowed = allowedOrigins.some(allowedOrigin => {
       if (typeof allowedOrigin === 'string') {
@@ -89,9 +92,9 @@ const corsOptions = {
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Content-Disposition'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Range'],
+  exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Range', 'Accept-Ranges'],
   maxAge: 86400 // 24 hours
 };
 
@@ -99,8 +102,53 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// FIXED: Serve uploaded files with proper headers for PDF viewing
+app.use('/uploads', (req, res, next) => {
+  // Set proper headers for PDF files
+  const filePath = path.join(uploadsDir, req.path);
+  
+  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    
+    // Handle range requests for large PDFs
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', chunksize);
+      res.status(206);
+      
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.pipe(res);
+      return;
+    }
+    
+    res.setHeader('Content-Length', fileSize);
+  }
+  
+  next();
+}, express.static(uploadsDir, {
+  // Additional options for static file serving
+  maxAge: '1y',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    if (path.toLowerCase().endsWith('.pdf')) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+  }
+}));
 
 // MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
@@ -355,7 +403,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files - List files with pagination and filtering
+// GET /api/files - List files with pagination and filtering - FIXED URL generation
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -382,12 +430,24 @@ app.get('/api/files', requireDB, async (req, res) => {
       File.countDocuments(filter)
     ]);
 
-    // Add URLs for local files
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    // FIXED: Generate proper URLs for production
+    const getBaseURL = () => {
+      // In production, use the request host
+      if (process.env.NODE_ENV === 'production') {
+        return `${req.protocol}://${req.get('host')}`;
+      }
+      // In development, use localhost
+      return `http://localhost:${process.env.PORT || 5000}`;
+    };
+
+    const baseURL = getBaseURL();
+    console.log('🔗 Using base URL:', baseURL);
+
     const enhancedFiles = files.map(file => ({
       ...file,
-      viewUrl: `${baseUrl}/uploads/${file.fileName}`,
-      downloadUrl: `${baseUrl}/api/files/${file._id}/download`,
+      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      directUrl: `${baseURL}/uploads/${file.fileName}`, // Direct access to file
       storageProvider: 'local',
       fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
     }));
@@ -402,7 +462,8 @@ app.get('/api/files', requireDB, async (req, res) => {
         hasNext: page < Math.ceil(total / limit),
         hasPrev: page > 1
       },
-      total
+      total,
+      baseURL // Include base URL in response for debugging
     });
   } catch (error) {
     console.error('Error fetching files:', error);
@@ -413,7 +474,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload PDF to local storage
+// POST /api/upload - Upload PDF to local storage - FIXED URL generation
 app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -506,8 +567,16 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
           await yearDoc.save({ session });
         }
 
-        // Create file record
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        // FIXED: Create file record with proper URLs
+        const getBaseURL = () => {
+          if (process.env.NODE_ENV === 'production') {
+            return `${req.protocol}://${req.get('host')}`;
+          }
+          return `http://localhost:${process.env.PORT || 5000}`;
+        };
+
+        const baseUrl = getBaseURL();
+        
         const fileDoc = new File({
           originalName: req.file.originalname,
           fileName: req.file.filename,
@@ -533,6 +602,7 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
             ...fileDoc.toObject(),
             viewUrl: `${baseUrl}/uploads/${req.file.filename}`,
             downloadUrl: `${baseUrl}/api/files/${fileDoc._id}/download`,
+            directUrl: `${baseUrl}/uploads/${req.file.filename}`,
             fileType: req.file.originalname.split('.').pop()?.toLowerCase() || 'pdf'
           }
         });
@@ -560,7 +630,7 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
   });
 });
 
-// GET /api/files/:fileId/download - Download file
+// GET /api/files/:fileId/download - Download file - FIXED
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -582,7 +652,12 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       });
     }
 
-    res.download(filePath, file.originalName);
+    // Set proper download headers
+    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    
+    res.sendFile(filePath);
   } catch (error) {
     console.error('Error downloading file:', error);
     res.status(500).json({ 
@@ -592,7 +667,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - View file
+// GET /api/files/:fileId/view - View file - FIXED for PDF viewing
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -614,6 +689,36 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       });
     }
 
+    // FIXED: Set proper headers for PDF viewing in browser
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', fileSize);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    
+    // Handle range requests for large PDFs
+    const range = req.headers.range;
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', chunksize);
+      res.status(206);
+      
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.pipe(res);
+      return;
+    }
+    
+    // Send the entire file
     res.sendFile(filePath);
   } catch (error) {
     console.error('Error viewing file:', error);
@@ -667,7 +772,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Statistics endpoint
+// GET /api/admin/stats - Statistics endpoint - FIXED URL generation
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -739,7 +844,15 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    // FIXED: Generate proper URLs for admin stats
+    const getBaseURL = () => {
+      if (process.env.NODE_ENV === 'production') {
+        return `${req.protocol}://${req.get('host')}`;
+      }
+      return `http://localhost:${process.env.PORT || 5000}`;
+    };
+
+    const baseURL = getBaseURL();
 
     res.json({
       overview: {
@@ -759,13 +872,15 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: `${baseUrl}/uploads/${file.fileName}`,
-        downloadUrl: `${baseUrl}/api/files/${file._id}/download`,
+        viewUrl: `${baseURL}/uploads/${file.fileName}`,
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+        directUrl: `${baseURL}/uploads/${file.fileName}`,
         fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
       storageProvider: 'Local File System',
-      storageLocation: uploadsDir
+      storageLocation: uploadsDir,
+      baseURL // Include for debugging
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);
@@ -776,7 +891,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Health check endpoint - ENHANCED with PDF serving test
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -802,12 +917,41 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
+  // FIXED: Test PDF serving capability
+  let pdfServingTest = 'Not tested';
+  try {
+    if (uploadsExists) {
+      const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+      if (testFiles.length > 0) {
+        const testFile = testFiles[0];
+        const testFilePath = path.join(uploadsDir, testFile);
+        const stats = fs.statSync(testFilePath);
+        pdfServingTest = `Ready - ${testFiles.length} PDF(s) available, sample: ${testFile} (${stats.size} bytes)`;
+      } else {
+        pdfServingTest = 'No PDF files to serve';
+      }
+    }
+  } catch (error) {
+    pdfServingTest = `Error: ${error.message}`;
+  }
+
   const overallStatus = (dbStatus === 1 && uploadsExists) ? 'OK' : 'Warning';
+
+  // FIXED: Generate proper base URL for health check
+  const getBaseURL = () => {
+    if (process.env.NODE_ENV === 'production') {
+      return `${req.protocol}://${req.get('host')}`;
+    }
+    return `http://localhost:${process.env.PORT || 5000}`;
+  };
+
+  const baseURL = getBaseURL();
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
     message: `Server is ${overallStatus === 'OK' ? 'healthy' : 'experiencing issues'}`,
     timestamp: new Date().toISOString(),
+    baseURL,
     services: {
       database: {
         status: dbStatusMap[dbStatus] || 'Unknown',
@@ -821,15 +965,60 @@ app.get('/api/health', async (req, res) => {
         uploadsDir,
         exists: uploadsExists,
         isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
-        writable: uploadsExists ? fs.constants.W_OK : false
+        writable: uploadsExists ? (fs.constants.W_OK ? 2 : 0) : false,
+        pdfServing: pdfServingTest
       }
     },
     environment: process.env.NODE_ENV || 'development',
     uptime: Math.floor(process.uptime()),
     uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
     version: process.env.npm_package_version || '1.0.0',
-    nodeVersion: process.version
+    nodeVersion: process.version,
+    // Add useful debugging info
+    urls: {
+      apiBase: baseURL,
+      uploads: `${baseURL}/uploads/`,
+      health: `${baseURL}/api/health`,
+      files: `${baseURL}/api/files`
+    }
   });
+});
+
+// ADDED: Test endpoint for PDF serving
+app.get('/api/test-pdf', async (req, res) => {
+  try {
+    // Find a sample PDF file
+    const files = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+    
+    if (files.length === 0) {
+      return res.json({
+        status: 'No PDFs available for testing',
+        message: 'Upload a PDF file first to test PDF serving'
+      });
+    }
+
+    const sampleFile = files[0];
+    const baseURL = `${req.protocol}://${req.get('host')}`;
+    
+    res.json({
+      status: 'PDF serving ready',
+      sampleFile,
+      testUrls: {
+        directAccess: `${baseURL}/uploads/${sampleFile}`,
+        viaApi: `${baseURL}/api/files/test/view`,
+      },
+      instructions: {
+        1: 'Click on directAccess URL to test direct PDF viewing',
+        2: 'This should open the PDF in your browser',
+        3: 'If it downloads instead of viewing, check browser settings'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'Error testing PDF serving',
+      error: error.message
+    });
+  }
 });
 
 // Initialize default semesters
@@ -903,36 +1092,52 @@ app.use((error, req, res, next) => {
   });
 });
 
-// 404 handler
+// 404 handler - ENHANCED
 app.use('*', (req, res) => {
   console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
+  
+  const baseURL = `${req.protocol}://${req.get('host')}`;
   
   res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
     method: req.method,
     timestamp: new Date().toISOString(),
+    baseURL,
     availableEndpoints: [
-      'GET /api/health',
-      'GET /api/files',
-      'GET /api/semesters',
-      'POST /api/upload',
-      'GET /api/files/:id/view',
-      'GET /api/files/:id/download'
-    ]
+      'GET /api/health - Server health check',
+      'GET /api/files - List all files',
+      'GET /api/semesters - List semesters',
+      'POST /api/upload - Upload new file',
+      'GET /api/files/:id/view - View file in browser',
+      'GET /api/files/:id/download - Download file',
+      'GET /api/test-pdf - Test PDF serving',
+      'GET /uploads/:filename - Direct file access'
+    ],
+    examples: {
+      healthCheck: `${baseURL}/api/health`,
+      listFiles: `${baseURL}/api/files?limit=5`,
+      testPdf: `${baseURL}/api/test-pdf`
+    }
   });
 });
 
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n📁 University Archive Server (Local Storage Edition)`);
+  console.log(`\n📁 University Archive Server (Local Storage Edition) - FIXED`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base URL: ${process.env.NODE_ENV === 'production' ? 'https://your-domain.com' : `http://localhost:${PORT}`}`);
+  
+  const serverURL = process.env.NODE_ENV === 'production' 
+    ? `https://archive-mi73.onrender.com` 
+    : `http://localhost:${PORT}`;
+    
+  console.log(`🔗 Server URL: ${serverURL}`);
   console.log(`💾 File Storage: Local file system (${uploadsDir})`);
-  console.log(`🛡️  Security: Helmet + Rate Limiting enabled`);
-  console.log(`🌐 CORS: Enabled for development origins`);
+  console.log(`🛡️  Security: Enhanced Helmet + CORS for PDF viewing`);
+  console.log(`🌐 CORS: Enabled for production origins`);
+  console.log(`📄 PDF Serving: Enhanced with range request support`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -943,17 +1148,35 @@ app.listen(PORT, async () => {
       await initializeSemesters();
       
       console.log('🎯 Server ready to accept connections');
-      console.log('📤 Files will be stored locally in /uploads directory');
-      console.log('📊 Admin panel: /api/admin/stats');
-      console.log('🔍 Health check: /api/health');
+      console.log('📤 Files accessible at:', `${serverURL}/uploads/`);
+      console.log('📊 Admin panel:', `${serverURL}/api/admin/stats`);
+      console.log('🔍 Health check:', `${serverURL}/api/health`);
+      console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
       
       if (process.env.NODE_ENV === 'production') {
         console.log('🚀 Running in PRODUCTION mode');
-        console.log('⚠️  Make sure to backup your uploads directory regularly');
+        console.log('⚠️  Make sure CORS allows your frontend domain');
+        console.log('📋 Current allowed origins include:');
+        console.log('   - https://www.larchive.tech');
+        console.log('   - https://larchive.tech');  
+        console.log('   - Vercel apps (*.vercel.app)');
       } else {
         console.log('🛠️  Running in DEVELOPMENT mode');
-        console.log(`📝 API Documentation available at http://localhost:${PORT}/api/health`);
-        console.log(`📁 Uploaded files accessible at http://localhost:${PORT}/uploads/`);
+        console.log(`📝 API Documentation: ${serverURL}/api/health`);
+        console.log(`📁 Direct file access: ${serverURL}/uploads/`);
+        console.log(`🔧 Debug endpoint: ${serverURL}/api/test-pdf`);
+      }
+      
+      // Test uploads directory
+      try {
+        const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+        console.log(`📄 Found ${testFiles.length} PDF file(s) in uploads directory`);
+        if (testFiles.length > 0) {
+          console.log(`📋 Sample file: ${testFiles[0]}`);
+          console.log(`🔗 Test URL: ${serverURL}/uploads/${testFiles[0]}`);
+        }
+      } catch (error) {
+        console.log('⚠️  Could not read uploads directory:', error.message);
       }
     }
   }, 1000);
@@ -963,6 +1186,7 @@ app.listen(PORT, async () => {
     clearInterval(waitForDB);
     if (mongoose.connection.readyState !== 1) {
       console.log('⚠️  Started without database connection - some features may be limited');
+      console.log('📄 PDF serving should still work for existing files');
     }
   }, 30000);
 });
