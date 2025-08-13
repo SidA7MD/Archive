@@ -474,6 +474,164 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
+// GET /api/admin/files - List all files for admin (NEW ENDPOINT)
+app.get('/api/admin/files', requireDB, async (req, res) => {
+  try {
+    console.log('📁 Admin: Fetching all files...');
+    
+    const files = await File.find()
+      .populate(['semester', 'type', 'subject', 'year'])
+      .sort({ uploadedAt: -1 })
+      .lean();
+
+    console.log(`📁 Admin: Found ${files.length} files`);
+
+    // Generate proper URLs for each file
+    const getBaseURL = () => {
+      if (process.env.NODE_ENV === 'production') {
+        return `${req.protocol}://${req.get('host')}`;
+      }
+      return `http://localhost:${process.env.PORT || 5000}`;
+    };
+
+    const baseURL = getBaseURL();
+
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      directUrl: `${baseURL}/uploads/${file.fileName}`,
+      storageProvider: 'local',
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
+
+    res.json(enhancedFiles);
+  } catch (error) {
+    console.error('❌ Error fetching admin files:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch files',
+      message: error.message 
+    });
+  }
+});
+
+// PUT /api/files/:fileId - Update file metadata (NEW ENDPOINT)
+app.put('/api/files/:fileId', requireDB, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { originalName, semester, type, subject, year } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(fileId)) {
+      return res.status(400).json({ error: 'Invalid file ID' });
+    }
+
+    console.log(`💾 Updating file ${fileId}:`, { originalName, semester, type, subject, year });
+
+    const session = await mongoose.startSession();
+
+    await session.withTransaction(async () => {
+      // Find the file first
+      const file = await File.findById(fileId).session(session);
+      if (!file) {
+        throw new Error('File not found');
+      }
+
+      // Find or create semester
+      let semesterDoc = await Semester.findOne({ name: semester }).session(session);
+      if (!semesterDoc) {
+        throw new Error('Invalid semester');
+      }
+
+      // Find or create type
+      let typeDoc = await Type.findOne({ 
+        name: type, 
+        semester: semesterDoc._id 
+      }).session(session);
+      
+      if (!typeDoc) {
+        const typeDisplayNames = {
+          'cours': 'Cours',
+          'tp': 'Travaux Pratiques',
+          'td': 'Travaux Dirigés',
+          'devoirs': 'Devoirs',
+          'compositions': 'Compositions',
+          'ratrapages': 'Rattrapages'
+        };
+        
+        typeDoc = new Type({
+          name: type,
+          displayName: typeDisplayNames[type] || type,
+          semester: semesterDoc._id
+        });
+        await typeDoc.save({ session });
+      }
+
+      // Find or create subject
+      let subjectDoc = await Subject.findOne({
+        name: subject,
+        semester: semesterDoc._id,
+        type: typeDoc._id
+      }).session(session);
+      
+      if (!subjectDoc) {
+        subjectDoc = new Subject({
+          name: subject,
+          semester: semesterDoc._id,
+          type: typeDoc._id
+        });
+        await subjectDoc.save({ session });
+      }
+
+      // Find or create year
+      let yearDoc = await Year.findOne({
+        year: parseInt(year),
+        semester: semesterDoc._id,
+        type: typeDoc._id,
+        subject: subjectDoc._id
+      }).session(session);
+      
+      if (!yearDoc) {
+        yearDoc = new Year({
+          year: parseInt(year),
+          semester: semesterDoc._id,
+          type: typeDoc._id,
+          subject: subjectDoc._id
+        });
+        await yearDoc.save({ session });
+      }
+
+      // Update the file
+      const updatedFile = await File.findByIdAndUpdate(
+        fileId,
+        {
+          originalName,
+          semester: semesterDoc._id,
+          type: typeDoc._id,
+          subject: subjectDoc._id,
+          year: yearDoc._id,
+          updatedAt: new Date()
+        },
+        { new: true, session }
+      ).populate(['semester', 'type', 'subject', 'year']);
+
+      console.log('✅ File updated successfully:', updatedFile.originalName);
+      
+      res.json({
+        message: 'File updated successfully',
+        file: updatedFile
+      });
+    });
+
+    await session.endSession();
+  } catch (error) {
+    console.error('❌ Error updating file:', error);
+    res.status(500).json({ 
+      error: 'Failed to update file',
+      message: error.message 
+    });
+  }
+});
+
 // POST /api/upload - Upload PDF to local storage - FIXED URL generation
 app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
@@ -1107,6 +1265,8 @@ app.use('*', (req, res) => {
     availableEndpoints: [
       'GET /api/health - Server health check',
       'GET /api/files - List all files',
+      'GET /api/admin/files - Admin: List all files (NEW)',
+      'PUT /api/files/:id - Admin: Update file metadata (NEW)',
       'GET /api/semesters - List semesters',
       'POST /api/upload - Upload new file',
       'GET /api/files/:id/view - View file in browser',
@@ -1117,6 +1277,7 @@ app.use('*', (req, res) => {
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
+      adminFiles: `${baseURL}/api/admin/files`,
       testPdf: `${baseURL}/api/test-pdf`
     }
   });
@@ -1125,7 +1286,7 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n📁 University Archive Server (Local Storage Edition) - FIXED`);
+  console.log(`\n📁 University Archive Server (Local Storage Edition) - COMPLETE`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1138,6 +1299,7 @@ app.listen(PORT, async () => {
   console.log(`🛡️  Security: Enhanced Helmet + CORS for PDF viewing`);
   console.log(`🌐 CORS: Enabled for production origins`);
   console.log(`📄 PDF Serving: Enhanced with range request support`);
+  console.log(`🆕 NEW ENDPOINTS: /api/admin/files & PUT /api/files/:id`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -1150,6 +1312,7 @@ app.listen(PORT, async () => {
       console.log('🎯 Server ready to accept connections');
       console.log('📤 Files accessible at:', `${serverURL}/uploads/`);
       console.log('📊 Admin panel:', `${serverURL}/api/admin/stats`);
+      console.log('📋 Admin files:', `${serverURL}/api/admin/files`);
       console.log('🔍 Health check:', `${serverURL}/api/health`);
       console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
       

@@ -1,19 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import styles from './AdminPage.module.css';
 
-// Define API base URL
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
 
 export const AdminPage = () => {
-  // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
-
-  // Tab state
   const [activeTab, setActiveTab] = useState('upload');
-
-  // Upload form state
   const [formData, setFormData] = useState({
     semester: 'S1',
     type: 'cours',
@@ -23,23 +17,18 @@ export const AdminPage = () => {
   });
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
-
-  // Files management state
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingFile, setEditingFile] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [stats, setStats] = useState(null);
-
-  // Search and filter state
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSemester, setFilterSemester] = useState('');
   const [filterType, setFilterType] = useState('');
 
-  // Password configuration
   const ADMIN_PASSWORD = 'admin123';
 
-  // Authentication handler
+  // --- Auth ---
   const handleLogin = (e) => {
     e.preventDefault();
     if (password === ADMIN_PASSWORD) {
@@ -51,8 +40,6 @@ export const AdminPage = () => {
       setPassword('');
     }
   };
-
-  // Logout handler
   const handleLogout = () => {
     setIsAuthenticated(false);
     setPassword('');
@@ -69,49 +56,35 @@ export const AdminPage = () => {
     setFiles([]);
   };
 
-  // Load files when switching to manage tab
   useEffect(() => {
-    if (isAuthenticated && activeTab === 'manage') {
-      loadFiles();
-    }
-    if (isAuthenticated && activeTab === 'stats') {
-      loadStats();
-    }
+    if (isAuthenticated && activeTab === 'manage') loadFiles();
+    if (isAuthenticated && activeTab === 'stats') loadStats();
+    // eslint-disable-next-line
   }, [isAuthenticated, activeTab]);
 
-  // Load files from API
+  // --- API ---
   const loadFiles = async () => {
     setLoading(true);
     try {
       const response = await fetch(`${API_BASE_URL}/api/admin/files`);
       const data = await response.json();
-      if (response.ok) {
-        setFiles(data);
-      } else {
-        setMessage('Erreur lors du chargement des fichiers: ' + data.error);
-      }
+      if (response.ok) setFiles(data);
+      else setMessage('Erreur lors du chargement des fichiers: ' + data.error);
     } catch (error) {
-      console.error('Error loading files:', error);
       setMessage('Erreur lors du chargement des fichiers: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
-
-  // Load stats from API
   const loadStats = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/admin/stats`);
       const data = await response.json();
-      if (response.ok) {
-        setStats(data);
-      }
-    } catch (error) {
-      console.error('Error loading stats:', error);
-    }
+      if (response.ok) setStats(data);
+    } catch (error) { /* ignore */ }
   };
 
-  // Upload form handlers
+  // --- Form ---
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -119,7 +92,6 @@ export const AdminPage = () => {
       [name]: value
     }));
   };
-
   const handleFileChange = (e) => {
     setFormData(prev => ({
       ...prev,
@@ -127,13 +99,20 @@ export const AdminPage = () => {
     }));
   };
 
+  // --- UPLOAD ---
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.pdf) {
-      setMessage('Veuillez sélectionner un fichier PDF');
+    // Validate all fields
+    if (
+      !formData.semester ||
+      !formData.type ||
+      !formData.subject.trim() ||
+      !formData.year.trim() ||
+      !formData.pdf
+    ) {
+      setMessage('Veuillez remplir tous les champs et sélectionner un fichier PDF.');
       return;
     }
-
     setUploading(true);
     setMessage('');
 
@@ -149,9 +128,7 @@ export const AdminPage = () => {
         method: 'POST',
         body: uploadData
       });
-      
       const responseData = await response.json();
-      
       if (response.ok) {
         setMessage('Fichier uploadé avec succès!');
         setFormData({
@@ -163,23 +140,18 @@ export const AdminPage = () => {
         });
         const fileInput = document.getElementById('pdf-input');
         if (fileInput) fileInput.value = '';
-        
-        // Reload files if on manage tab
-        if (activeTab === 'manage') {
-          loadFiles();
-        }
+        if (activeTab === 'manage') loadFiles();
       } else {
-        throw new Error(responseData.error || 'Upload failed');
+        setMessage('Erreur lors de l\'upload: ' + (responseData.error || 'Upload failed'));
       }
     } catch (error) {
-      console.error('Upload error:', error);
       setMessage('Erreur lors de l\'upload: ' + error.message);
     } finally {
       setUploading(false);
     }
   };
 
-  // Edit file handlers
+  // --- EDIT ---
   const startEditing = (file) => {
     setEditingFile({
       ...file,
@@ -190,20 +162,13 @@ export const AdminPage = () => {
       year: file.year?.year || ''
     });
   };
-
-  const cancelEditing = () => {
-    setEditingFile(null);
-  };
-
+  const cancelEditing = () => setEditingFile(null);
   const saveEdit = async () => {
     if (!editingFile) return;
-
     try {
       const response = await fetch(`${API_BASE_URL}/api/files/${editingFile._id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           originalName: editingFile.originalName,
           semester: editingFile.semester,
@@ -212,68 +177,52 @@ export const AdminPage = () => {
           year: editingFile.year
         })
       });
-
       const data = await response.json();
-      
       if (response.ok) {
         setMessage('Fichier mis à jour avec succès!');
         setEditingFile(null);
         loadFiles();
       } else {
-        throw new Error(data.error || 'Update failed');
+        setMessage('Erreur lors de la mise à jour: ' + (data.error || 'Update failed'));
       }
     } catch (error) {
-      console.error('Update error:', error);
       setMessage('Erreur lors de la mise à jour: ' + error.message);
     }
   };
 
-  // Delete file handlers
-  const confirmDelete = (file) => {
-    setDeleteConfirm(file);
-  };
-
-  const cancelDelete = () => {
-    setDeleteConfirm(null);
-  };
-
+  // --- DELETE ---
+  const confirmDelete = (file) => setDeleteConfirm(file);
+  const cancelDelete = () => setDeleteConfirm(null);
   const deleteFile = async () => {
     if (!deleteConfirm) return;
-
     try {
       const response = await fetch(`${API_BASE_URL}/api/files/${deleteConfirm._id}`, {
         method: 'DELETE'
       });
-
       const data = await response.json();
-      
       if (response.ok) {
         setMessage('Fichier supprimé avec succès!');
         setDeleteConfirm(null);
         loadFiles();
-        if (activeTab === 'stats') {
-          loadStats();
-        }
+        if (activeTab === 'stats') loadStats();
       } else {
-        throw new Error(data.error || 'Delete failed');
+        setMessage('Erreur lors de la suppression: ' + (data.error || 'Delete failed'));
       }
     } catch (error) {
-      console.error('Delete error:', error);
       setMessage('Erreur lors de la suppression: ' + error.message);
     }
   };
 
-  // Filter files
+  // --- FILTERS ---
   const filteredFiles = files.filter(file => {
     const matchesSearch = file.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         file.subject?.name.toLowerCase().includes(searchTerm.toLowerCase());
+      file.subject?.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSemester = !filterSemester || file.semester?.name === filterSemester;
     const matchesType = !filterType || file.type?.name === filterType;
-    
     return matchesSearch && matchesSemester && matchesType;
   });
 
-  // Format file size
+  // --- UTILS ---
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -281,15 +230,11 @@ export const AdminPage = () => {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
-
-  // Handle Enter key for login
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      handleLogin(e);
-    }
+    if (e.key === 'Enter') handleLogin(e);
   };
 
-  // Render login form if not authenticated
+  // --- RENDER ---
   if (!isAuthenticated) {
     return (
       <div className={styles.loginPage}>
@@ -301,16 +246,12 @@ export const AdminPage = () => {
               <path d="M12 1v6"/>
             </svg>
           </div>
-          
           <div>
-            <h2 className={`${styles.loginTitle} ${styles.h1}`}>
-              Accès Administrateur
-            </h2>
+            <h2 className={`${styles.loginTitle} ${styles.h1}`}>Accès Administrateur</h2>
             <p className={styles.loginSubtitle}>
               Entrez votre mot de passe pour accéder au panneau d'administration
             </p>
           </div>
-
           <div className={styles.loginInputContainer}>
             <input
               type="password"
@@ -323,21 +264,12 @@ export const AdminPage = () => {
               required
             />
           </div>
-          
-          <button 
-            onClick={handleLogin}
-            className={styles.loginButton}
-            type="button"
-          >
+          <button onClick={handleLogin} className={styles.loginButton} type="button">
             Se connecter
           </button>
-
           {authError && (
-            <div className={styles.loginError}>
-              {authError}
-            </div>
+            <div className={styles.loginError}>{authError}</div>
           )}
-
           <div className={styles.loginDecorationTop}></div>
           <div className={styles.loginDecorationBottom}></div>
         </div>
@@ -345,7 +277,6 @@ export const AdminPage = () => {
     );
   }
 
-  // Render admin panel if authenticated
   return (
     <div className={styles.adminPage}>
       <div className={styles.adminContainer}>
@@ -353,35 +284,24 @@ export const AdminPage = () => {
           <h1 className={`${styles.adminTitle} ${styles.h1}`}>
             Administration - Gestion des Fichiers
           </h1>
-          <button 
-            onClick={handleLogout}
-            className={styles.logoutButton}
-            type="button"
-          >
+          <button onClick={handleLogout} className={styles.logoutButton} type="button">
             Déconnexion
           </button>
         </div>
-
         {/* Tab Navigation */}
         <div className={styles.tabNav}>
-          <button 
+          <button
             className={`${styles.tabButton} ${activeTab === 'upload' ? styles.active : ''}`}
             onClick={() => setActiveTab('upload')}
-          >
-            📤 Upload
-          </button>
-          <button 
+          >📤 Upload</button>
+          <button
             className={`${styles.tabButton} ${activeTab === 'manage' ? styles.active : ''}`}
             onClick={() => setActiveTab('manage')}
-          >
-            📁 Gérer les Fichiers
-          </button>
-          <button 
+          >📁 Gérer les Fichiers</button>
+          <button
             className={`${styles.tabButton} ${activeTab === 'stats' ? styles.active : ''}`}
             onClick={() => setActiveTab('stats')}
-          >
-            📊 Statistiques
-          </button>
+          >📊 Statistiques</button>
         </div>
 
         {/* Upload Tab */}
@@ -389,13 +309,7 @@ export const AdminPage = () => {
           <form onSubmit={handleSubmit} className={styles.uploadForm}>
             <div className={styles.formGroup}>
               <label htmlFor="semester">Semestre</label>
-              <select
-                id="semester"
-                name="semester"
-                value={formData.semester}
-                onChange={handleInputChange}
-                required
-              >
+              <select id="semester" name="semester" value={formData.semester} onChange={handleInputChange} required>
                 <option value="S1">Semestre 1</option>
                 <option value="S2">Semestre 2</option>
                 <option value="S3">Semestre 3</option>
@@ -403,16 +317,9 @@ export const AdminPage = () => {
                 <option value="S5">Semestre 5</option>
               </select>
             </div>
-
             <div className={styles.formGroup}>
               <label htmlFor="type">Type</label>
-              <select
-                id="type"
-                name="type"
-                value={formData.type}
-                onChange={handleInputChange}
-                required
-              >
+              <select id="type" name="type" value={formData.type} onChange={handleInputChange} required>
                 <option value="cours">Cours</option>
                 <option value="tp">Travaux Pratiques</option>
                 <option value="td">Travaux Dirigés</option>
@@ -421,7 +328,6 @@ export const AdminPage = () => {
                 <option value="ratrapages">Rattrapages</option>
               </select>
             </div>
-
             <div className={styles.formGroup}>
               <label htmlFor="subject">Matière</label>
               <input
@@ -434,7 +340,6 @@ export const AdminPage = () => {
                 required
               />
             </div>
-
             <div className={styles.formGroup}>
               <label htmlFor="year">Année</label>
               <input
@@ -447,7 +352,6 @@ export const AdminPage = () => {
                 required
               />
             </div>
-
             <div className={`${styles.formGroup} ${styles.fullWidth}`}>
               <label htmlFor="pdf-input">Fichier PDF</label>
               <input
@@ -458,12 +362,7 @@ export const AdminPage = () => {
                 required
               />
             </div>
-
-            <button 
-              type="submit" 
-              disabled={uploading}
-              className={styles.submitButton}
-            >
+            <button type="submit" disabled={uploading} className={styles.submitButton}>
               {uploading ? 'Upload en cours...' : 'Uploader le fichier'}
             </button>
           </form>
@@ -472,7 +371,6 @@ export const AdminPage = () => {
         {/* Manage Files Tab */}
         {activeTab === 'manage' && (
           <div className={styles.manageSection}>
-            {/* Search and Filters */}
             <div className={styles.filtersSection}>
               <div className={styles.searchGroup}>
                 <input
@@ -484,11 +382,7 @@ export const AdminPage = () => {
                 />
               </div>
               <div className={styles.filterGroup}>
-                <select
-                  value={filterSemester}
-                  onChange={(e) => setFilterSemester(e.target.value)}
-                  className={styles.filterSelect}
-                >
+                <select value={filterSemester} onChange={(e) => setFilterSemester(e.target.value)} className={styles.filterSelect}>
                   <option value="">Tous les semestres</option>
                   <option value="S1">Semestre 1</option>
                   <option value="S2">Semestre 2</option>
@@ -496,11 +390,7 @@ export const AdminPage = () => {
                   <option value="S4">Semestre 4</option>
                   <option value="S5">Semestre 5</option>
                 </select>
-                <select
-                  value={filterType}
-                  onChange={(e) => setFilterType(e.target.value)}
-                  className={styles.filterSelect}
-                >
+                <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className={styles.filterSelect}>
                   <option value="">Tous les types</option>
                   <option value="cours">Cours</option>
                   <option value="tp">Travaux Pratiques</option>
@@ -510,11 +400,7 @@ export const AdminPage = () => {
                   <option value="ratrapages">Rattrapages</option>
                 </select>
               </div>
-              <button
-                onClick={loadFiles}
-                className={styles.refreshButton}
-                disabled={loading}
-              >
+              <button onClick={loadFiles} className={styles.refreshButton} disabled={loading}>
                 🔄 Actualiser
               </button>
             </div>
@@ -631,41 +517,19 @@ export const AdminPage = () => {
                           <td className={styles.actions}>
                             {editingFile && editingFile._id === file._id ? (
                               <>
-                                <button
-                                  onClick={saveEdit}
-                                  className={styles.saveButton}
-                                >
-                                  💾
-                                </button>
-                                <button
-                                  onClick={cancelEditing}
-                                  className={styles.cancelButton}
-                                >
-                                  ❌
-                                </button>
+                                <button onClick={saveEdit} className={styles.saveButton}>💾</button>
+                                <button onClick={cancelEditing} className={styles.cancelButton}>❌</button>
                               </>
                             ) : (
                               <>
-                                <button
-                                  onClick={() => startEditing(file)}
-                                  className={styles.editButton}
-                                >
-                                  ✏️
-                                </button>
+                                <button onClick={() => startEditing(file)} className={styles.editButton}>✏️</button>
                                 <a
                                   href={`${API_BASE_URL}/api/files/${file._id}/view`}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className={styles.viewButton}
-                                >
-                                  👁️
-                                </a>
-                                <button
-                                  onClick={() => confirmDelete(file)}
-                                  className={styles.deleteButton}
-                                >
-                                  🗑️
-                                </button>
+                                >👁️</a>
+                                <button onClick={() => confirmDelete(file)} className={styles.deleteButton}>🗑️</button>
                               </>
                             )}
                           </td>
@@ -700,7 +564,6 @@ export const AdminPage = () => {
                   <h3>💾 Taille Totale</h3>
                   <div className={styles.statNumber}>{formatFileSize(stats.totalSize)}</div>
                 </div>
-                
                 {stats.filesByType && stats.filesByType.length > 0 && (
                   <div className={styles.statCard + ' ' + styles.fullWidth}>
                     <h3>📊 Fichiers par Type</h3>
@@ -729,18 +592,8 @@ export const AdminPage = () => {
               <p>Êtes-vous sûr de vouloir supprimer le fichier "{deleteConfirm.originalName}" ?</p>
               <p><strong>Cette action est irréversible!</strong></p>
               <div className={styles.modalActions}>
-                <button
-                  onClick={deleteFile}
-                  className={styles.deleteConfirmButton}
-                >
-                  Oui, Supprimer
-                </button>
-                <button
-                  onClick={cancelDelete}
-                  className={styles.cancelButton}
-                >
-                  Annuler
-                </button>
+                <button onClick={deleteFile} className={styles.deleteConfirmButton}>Oui, Supprimer</button>
+                <button onClick={cancelDelete} className={styles.cancelButton}>Annuler</button>
               </div>
             </div>
           </div>
