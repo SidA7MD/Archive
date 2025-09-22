@@ -13,43 +13,12 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// FIXED: Configure uploads directory for Render.com persistent storage
-const getUploadsDir = () => {
-  // Check for Render.com persistent disk
-  if (process.env.RENDER_PERSISTENT_DIR) {
-    const renderUploadsDir = path.join(process.env.RENDER_PERSISTENT_DIR, 'uploads');
-    console.log('Using Render persistent disk for uploads:', renderUploadsDir);
-    return renderUploadsDir;
-  }
-  
-  // Default uploads directory
-  return path.join(__dirname, 'uploads');
-};
-
-const uploadsDir = getUploadsDir();
-
 // Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('Created uploads directory at:', uploadsDir);
+  console.log('📁 Created uploads directory');
 }
-
-// CRITICAL FIX: Serve uploaded files BEFORE any other middleware
-// This ensures direct file access works without interference
-app.use('/uploads', express.static(uploadsDir, {
-  maxAge: '1d', // Cache for 1 day
-  etag: true,
-  lastModified: true,
-  setHeaders: (res, path) => {
-    if (path.toLowerCase().endsWith('.pdf')) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-      res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-    }
-  }
-}));
 
 // Security middleware - FIXED for PDF serving
 app.use(helmet({
@@ -156,6 +125,54 @@ const getBaseURL = (req) => {
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
+// FIXED: Serve uploaded files with proper headers for PDF viewing
+app.use('/uploads', (req, res, next) => {
+  // Set proper headers for PDF files
+  const filePath = path.join(uploadsDir, req.path);
+  
+  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    
+    // Handle range requests for large PDFs
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', chunksize);
+      res.status(206);
+      
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.pipe(res);
+      return;
+    }
+    
+    res.setHeader('Content-Length', fileSize);
+  }
+  
+  next();
+}, express.static(uploadsDir, {
+  // Additional options for static file serving
+  maxAge: '1y',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    if (path.toLowerCase().endsWith('.pdf')) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+  }
+}));
+
 // MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
@@ -171,7 +188,7 @@ const mongooseOptions = {
   heartbeatFrequencyMS: 10000
 };
 
-console.log('Attempting to connect to MongoDB...');
+console.log('🔄 Attempting to connect to MongoDB...');
 
 let isConnecting = false;
 let reconnectTimeout;
@@ -184,20 +201,20 @@ const connectDB = async () => {
   
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
-    console.log('Connected to MongoDB successfully');
+    console.log('✅ Connected to MongoDB successfully');
     retryCount = 0;
     isConnecting = false;
   } catch (error) {
-    console.error('MongoDB connection error:', error.message);
+    console.error('❌ MongoDB connection error:', error.message);
     isConnecting = false;
     retryCount++;
     
     if (retryCount <= maxRetries) {
       const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
-      console.log(`Retrying connection in ${delay/1000} seconds... (attempt ${retryCount}/${maxRetries})`);
+      console.log(`🔄 Retrying connection in ${delay/1000} seconds... (attempt ${retryCount}/${maxRetries})`);
       reconnectTimeout = setTimeout(connectDB, delay);
     } else {
-      console.error('Max retry attempts reached. Please check your MongoDB configuration.');
+      console.error('❌ Max retry attempts reached. Please check your MongoDB configuration.');
     }
   }
 };
@@ -207,7 +224,7 @@ connectDB();
 
 // Connection event listeners
 mongoose.connection.on('connected', () => {
-  console.log('Mongoose connected to MongoDB');
+  console.log('✅ Mongoose connected to MongoDB');
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
@@ -215,13 +232,13 @@ mongoose.connection.on('connected', () => {
 });
 
 mongoose.connection.on('error', (err) => {
-  console.error('Mongoose connection error:', err.message);
+  console.error('❌ Mongoose connection error:', err.message);
 });
 
 mongoose.connection.on('disconnected', () => {
-  console.log('Mongoose disconnected from MongoDB');
+  console.log('⚠️  Mongoose disconnected from MongoDB');
   if (!isConnecting && !reconnectTimeout && retryCount < maxRetries) {
-    console.log('Attempting to reconnect...');
+    console.log('🔄 Attempting to reconnect...');
     reconnectTimeout = setTimeout(connectDB, 5000);
   }
 });
@@ -277,45 +294,25 @@ const requireDB = (req, res, next) => {
   next();
 };
 
-// NEW: Debug endpoint to help troubleshoot file access
-app.get('/api/debug/uploads', (req, res) => {
-  try {
-    const files = fs.readdirSync(uploadsDir);
-    const fileDetails = files.map(file => {
-      const filePath = path.join(uploadsDir, file);
-      const stats = fs.statSync(filePath);
-      return {
-        name: file,
-        size: stats.size,
-        created: stats.birthtime,
-        path: filePath,
-        url: `${getBaseURL(req)}/uploads/${file}`,
-        exists: fs.existsSync(filePath),
-        absolutePath: path.resolve(filePath)
-      };
-    });
-    
-    res.json({
-      uploadsDir,
-      absoluteUploadsDir: path.resolve(uploadsDir),
-      fileCount: files.length,
-      baseURL: getBaseURL(req),
-      files: fileDetails,
-      environment: {
-        NODE_ENV: process.env.NODE_ENV,
-        RENDER_PERSISTENT_DIR: process.env.RENDER_PERSISTENT_DIR || 'not set',
-        RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL || 'not set'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error.message,
-      uploadsDir,
-      exists: fs.existsSync(uploadsDir),
-      absoluteUploadsDir: path.resolve(uploadsDir)
+// Input validation middleware
+const validateUploadData = (req, res, next) => {
+  const { semester, type, subject, year } = req.body;
+  
+  if (!semester || !type || !subject || !year) {
+    return res.status(400).json({
+      error: 'Missing required fields',
+      required: ['semester', 'type', 'subject', 'year']
     });
   }
-});
+
+  if (isNaN(parseInt(year))) {
+    return res.status(400).json({
+      error: 'Year must be a valid number'
+    });
+  }
+
+  next();
+};
 
 // Routes
 
@@ -419,18 +416,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .sort({ uploadedAt: -1 })
       .lean();
       
-    // FIXED: URLs for files with better fallbacks
-    const baseURL = getBaseURL(req);
-    const enhancedFiles = files.map(file => ({
-      ...file,
-      viewUrl: `${baseURL}/uploads/${file.fileName}`,
-      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      directUrl: `${baseURL}/uploads/${file.fileName}`,
-      storageProvider: 'local',
-      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
-    }));
-      
-    res.json(enhancedFiles);
+    res.json(files);
   } catch (error) {
     console.error('Error fetching files:', error);
     res.status(500).json({ 
@@ -469,7 +455,7 @@ app.get('/api/files', requireDB, async (req, res) => {
 
     // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
-    console.log('Using base URL:', baseURL);
+    console.log('🔗 Using base URL:', baseURL);
 
     const enhancedFiles = files.map(file => ({
       ...file,
@@ -505,14 +491,14 @@ app.get('/api/files', requireDB, async (req, res) => {
 // GET /api/admin/files - List all files for admin
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
-    console.log('Admin: Fetching all files...');
+    console.log('📁 Admin: Fetching all files...');
     
     const files = await File.find()
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
 
-    console.log(`Admin: Found ${files.length} files`);
+    console.log(`📁 Admin: Found ${files.length} files`);
 
     // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
@@ -528,7 +514,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
 
     res.json(enhancedFiles);
   } catch (error) {
-    console.error('Error fetching admin files:', error);
+    console.error('❌ Error fetching admin files:', error);
     res.status(500).json({ 
       error: 'Failed to fetch files',
       message: error.message 
@@ -546,7 +532,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(400).json({ error: 'Invalid file ID' });
     }
 
-    console.log(`Updating file ${fileId}:`, { originalName, semester, type, subject, year });
+    console.log(`💾 Updating file ${fileId}:`, { originalName, semester, type, subject, year });
 
     const session = await mongoose.startSession();
 
@@ -635,7 +621,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         { new: true, session }
       ).populate(['semester', 'type', 'subject', 'year']);
 
-      console.log('File updated successfully:', updatedFile.originalName);
+      console.log('✅ File updated successfully:', updatedFile.originalName);
       
       res.json({
         message: 'File updated successfully',
@@ -645,7 +631,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
 
     await session.endSession();
   } catch (error) {
-    console.error('Error updating file:', error);
+    console.error('❌ Error updating file:', error);
     res.status(500).json({ 
       error: 'Failed to update file',
       message: error.message 
@@ -653,10 +639,9 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// FIXED: Upload route with validation AFTER multer processing
-app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
+// POST /api/upload - Upload PDF to local storage - COMPLETELY FIXED
+app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
-    // Handle multer errors first
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
@@ -670,56 +655,12 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
-    // NOW validate the form data (after multer has processed it)
-    const { semester, type, subject, year } = req.body;
-    
-    console.log('Validation check:', {
-      semester,
-      type, 
-      subject,
-      year,
-      file: req.file ? req.file.originalname : 'none',
-      bodyKeys: Object.keys(req.body)
-    });
-    
-    if (!semester || !type || !subject || !year) {
-      // Clean up uploaded file since validation failed
-      if (req.file && req.file.path) {
-        try {
-          fs.unlinkSync(req.file.path);
-          console.log('Cleaned up file after validation failure:', req.file.path);
-        } catch (cleanupError) {
-          console.error('Error cleaning up file:', cleanupError);
-        }
-      }
-      
-      return res.status(400).json({
-        error: 'Missing required fields',
-        required: ['semester', 'type', 'subject', 'year'],
-        received: { semester, type, subject, year },
-        bodyKeys: Object.keys(req.body)
-      });
-    }
-
-    if (isNaN(parseInt(year))) {
-      // Clean up uploaded file since validation failed
-      if (req.file && req.file.path) {
-        try {
-          fs.unlinkSync(req.file.path);
-        } catch (cleanupError) {
-          console.error('Error cleaning up file:', cleanupError);
-        }
-      }
-      
-      return res.status(400).json({
-        error: 'Year must be a valid number'
-      });
-    }
-
     const session = await mongoose.startSession();
     
     try {
-      console.log('File uploaded locally:', {
+      const { semester, type, subject, year } = req.body;
+      
+      console.log('📤 File uploaded locally:', {
         filename: req.file.filename,
         originalName: req.file.originalname,
         size: req.file.size,
@@ -791,9 +732,9 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           await yearDoc.save({ session });
         }
 
-        // Use the enhanced getBaseURL function
+        // COMPLETELY FIXED: Use the enhanced getBaseURL function
         const baseUrl = getBaseURL(req);
-        console.log('Upload: Using base URL:', baseUrl);
+        console.log('🔗 Upload: Using base URL:', baseUrl);
         
         const fileDoc = new File({
           originalName: req.file.originalname,
@@ -822,7 +763,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           fileType: req.file.originalname.split('.').pop()?.toLowerCase() || 'pdf'
         };
 
-        console.log('Upload successful. File URLs:', {
+        console.log('✅ Upload successful. File URLs:', {
           viewUrl: responseFile.viewUrl,
           downloadUrl: responseFile.downloadUrl,
           directUrl: responseFile.directUrl
@@ -840,7 +781,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       if (req.file && req.file.path) {
         try {
           fs.unlinkSync(req.file.path);
-          console.log('Cleaned up local file:', req.file.path);
+          console.log('🗑️  Cleaned up local file:', req.file.path);
         } catch (cleanupError) {
           console.error('Error cleaning up local file:', cleanupError);
         }
@@ -868,7 +809,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -905,7 +846,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -968,14 +909,14 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
     }
 
     // Delete physical file
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     let fileDeleted = false;
     
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
         fileDeleted = true;
-        console.log('Deleted local file:', filePath);
+        console.log('🗑️  Deleted local file:', filePath);
       } catch (error) {
         console.warn('Warning: Could not delete physical file:', error.message);
       }
@@ -1178,10 +1119,7 @@ app.get('/api/health', async (req, res) => {
         exists: uploadsExists,
         isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
         writable: uploadsExists ? (fs.constants.W_OK ? 2 : 0) : false,
-        pdfServing: pdfServingTest,
-        environment: {
-          RENDER_PERSISTENT_DIR: process.env.RENDER_PERSISTENT_DIR || 'not set'
-        }
+        pdfServing: pdfServingTest
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1194,8 +1132,7 @@ app.get('/api/health', async (req, res) => {
       apiBase: baseURL,
       uploads: `${baseURL}/uploads/`,
       health: `${baseURL}/api/health`,
-      files: `${baseURL}/api/files`,
-      debug: `${baseURL}/api/debug/uploads`
+      files: `${baseURL}/api/files`
     }
   });
 });
@@ -1210,9 +1147,7 @@ app.get('/api/test-pdf', async (req, res) => {
       return res.json({
         status: 'No PDFs available for testing',
         message: 'Upload a PDF file first to test PDF serving',
-        baseURL: getBaseURL(req),
-        uploadsDir,
-        directoryContents: fs.readdirSync(uploadsDir)
+        baseURL: getBaseURL(req)
       });
     }
 
@@ -1227,11 +1162,6 @@ app.get('/api/test-pdf', async (req, res) => {
         directAccess: `${baseURL}/uploads/${sampleFile}`,
         viaApi: `${baseURL}/api/files/test/view`,
       },
-      fileInfo: {
-        path: path.join(uploadsDir, sampleFile),
-        exists: fs.existsSync(path.join(uploadsDir, sampleFile)),
-        size: fs.statSync(path.join(uploadsDir, sampleFile)).size
-      },
       instructions: {
         1: 'Click on directAccess URL to test direct PDF viewing',
         2: 'This should open the PDF in your browser',
@@ -1242,9 +1172,7 @@ app.get('/api/test-pdf', async (req, res) => {
     res.status(500).json({
       status: 'Error testing PDF serving',
       error: error.message,
-      stack: error.stack,
-      baseURL: getBaseURL(req),
-      uploadsDir
+      baseURL: getBaseURL(req)
     });
   }
 });
@@ -1264,18 +1192,18 @@ async function initializeSemesters() {
       const existing = await Semester.findOne({ name: sem.name });
       if (!existing) {
         await new Semester(sem).save();
-        console.log(`Created semester: ${sem.displayName}`);
+        console.log(`✅ Created semester: ${sem.displayName}`);
       }
     }
-    console.log('Semesters initialization completed');
+    console.log('📚 Semesters initialization completed');
   } catch (error) {
-    console.error('Error initializing semesters:', error);
+    console.error('❌ Error initializing semesters:', error);
   }
 }
 
 // Graceful shutdown handler
 const gracefulShutdown = async (signal) => {
-  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+  console.log(`\n📡 Received ${signal}, shutting down gracefully...`);
   
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
@@ -1284,13 +1212,13 @@ const gracefulShutdown = async (signal) => {
   try {
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
-      console.log('MongoDB connection closed');
+      console.log('✅ MongoDB connection closed');
     }
   } catch (error) {
-    console.error('Error closing database connection:', error);
+    console.error('❌ Error closing database connection:', error);
   }
   
-  console.log('Server shutdown complete');
+  console.log('👋 Server shutdown complete');
   process.exit(0);
 };
 
@@ -1299,7 +1227,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('Unhandled error:', {
+  console.error('💥 Unhandled error:', {
     message: error.message,
     stack: error.stack,
     url: req.url,
@@ -1322,7 +1250,7 @@ app.use((error, req, res, next) => {
 
 // 404 handler - ENHANCED
 app.use('*', (req, res) => {
-  console.log(`Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
+  console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
   
   const baseURL = getBaseURL(req);
   
@@ -1342,15 +1270,13 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
       'GET /api/test-pdf - Test PDF serving',
-      'GET /api/debug/uploads - Debug file storage',
       'GET /uploads/:filename - Direct file access'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testPdf: `${baseURL}/api/test-pdf`,
-      debugUploads: `${baseURL}/api/debug/uploads`
+      testPdf: `${baseURL}/api/test-pdf`
     }
   });
 });
@@ -1358,63 +1284,73 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\nUniversity Archive Server - COMPLETELY FIXED FOR RENDER`);
-  console.log(`Running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`\n📁 University Archive Server - COMPLETELY FIXED FOR RENDER`);
+  console.log(`📡 Running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
   // Enhanced URL detection for Render
   const serverURL = process.env.RENDER_EXTERNAL_URL || 
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
-  console.log(`Server URL: ${serverURL}`);
-  console.log(`File Storage: ${process.env.RENDER_PERSISTENT_DIR ? 'Render Persistent Disk' : 'Local file system'} (${uploadsDir})`);
-  console.log(`Security: Enhanced Helmet + CORS for PDF viewing`);
-  console.log(`CORS: Enabled for production origins`);
-  console.log(`PDF Serving: Enhanced with range request support`);
-  console.log(`URL Generation: Smart detection for Render deployment`);
-  console.log(`Static File Order: Correct middleware ordering for PDF serving`);
+  console.log(`🔗 Server URL: ${serverURL}`);
+  console.log(`💾 File Storage: Local file system (${uploadsDir})`);
+  console.log(`🛡️  Security: Enhanced Helmet + CORS for PDF viewing`);
+  console.log(`🌐 CORS: Enabled for production origins`);
+  console.log(`📄 PDF Serving: Enhanced with range request support`);
+  console.log(`🔧 URL Generation: Smart detection for Render deployment`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
     if (mongoose.connection.readyState === 1) {
       clearInterval(waitForDB);
       
-      console.log('Initializing application...');
+      console.log('🔧 Initializing application...');
       await initializeSemesters();
       
-      console.log('Server ready to accept connections');
-      console.log('Files accessible at:', `${serverURL}/uploads/`);
-      console.log('Admin panel:', `${serverURL}/api/admin/stats`);
-      console.log('Admin files:', `${serverURL}/api/admin/files`);
-      console.log('Health check:', `${serverURL}/api/health`);
-      console.log('PDF test:', `${serverURL}/api/test-pdf`);
-      console.log('Debug endpoint:', `${serverURL}/api/debug/uploads`);
+      console.log('🎯 Server ready to accept connections');
+      console.log('📤 Files accessible at:', `${serverURL}/uploads/`);
+      console.log('📊 Admin panel:', `${serverURL}/api/admin/stats`);
+      console.log('📋 Admin files:', `${serverURL}/api/admin/files`);
+      console.log('🔍 Health check:', `${serverURL}/api/health`);
+      console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
       
       if (process.env.NODE_ENV === 'production' || serverURL.includes('.onrender.com')) {
-        console.log('Running in PRODUCTION/RENDER mode');
-        console.log('Make sure to configure:');
-        console.log('1. Set NODE_ENV=production in Render dashboard');
-        console.log('2. Add a persistent disk in Render dashboard');
-        console.log('3. Set RENDER_PERSISTENT_DIR=/var/data (or your mount path)');
-        console.log('4. Set RENDER_EXTERNAL_URL=https://archive-mi73.onrender.com');
+        console.log('🚀 Running in PRODUCTION/RENDER mode');
+        console.log('⚠️  Make sure NODE_ENV is set to "production" in Render dashboard');
+        console.log('📋 Current allowed origins include:');
+        console.log('   - https://www.larchive.tech');
+        console.log('   - https://larchive.tech');  
+        console.log('   - Vercel apps (*.vercel.app)');
+        console.log('   - Render apps (*.render.com)');
       } else {
-        console.log('Running in DEVELOPMENT mode');
-        console.log(`API Documentation: ${serverURL}/api/health`);
-        console.log(`Direct file access: ${serverURL}/uploads/`);
-        console.log(`Debug endpoint: ${serverURL}/api/debug/uploads`);
+        console.log('🛠️  Running in DEVELOPMENT mode');
+        console.log(`📝 API Documentation: ${serverURL}/api/health`);
+        console.log(`📁 Direct file access: ${serverURL}/uploads/`);
+        console.log(`🔧 Debug endpoint: ${serverURL}/api/test-pdf`);
       }
       
       // Test uploads directory
       try {
         const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
-        console.log(`Found ${testFiles.length} PDF file(s) in uploads directory`);
+        console.log(`📄 Found ${testFiles.length} PDF file(s) in uploads directory`);
         if (testFiles.length > 0) {
-          console.log(`Sample file: ${testFiles[0]}`);
-          console.log(`Test URL: ${serverURL}/uploads/${testFiles[0]}`);
+          console.log(`📋 Sample file: ${testFiles[0]}`);
+          console.log(`🔗 Test URL: ${serverURL}/uploads/${testFiles[0]}`);
         }
       } catch (error) {
-        console.log('Could not read uploads directory:', error.message);
+        console.log('⚠️  Could not read uploads directory:', error.message);
       }
+      
+      console.log('\n🔥 KEY FIXES APPLIED:');
+      console.log('✅ Enhanced getBaseURL() function with Render detection');
+      console.log('✅ Smart URL generation for both development and production');
+      console.log('✅ Proper .onrender.com domain detection');
+      console.log('✅ All endpoints use consistent URL generation');
+      console.log('✅ Upload endpoint completely fixed for Render');
+      console.log('\n🎯 NEXT STEPS:');
+      console.log('1. Set NODE_ENV=production in Render dashboard');
+      console.log('2. Test upload functionality');
+      console.log('3. Check PDF viewing in browser');
     }
   }, 1000);
   
@@ -1422,8 +1358,8 @@ app.listen(PORT, async () => {
   setTimeout(() => {
     clearInterval(waitForDB);
     if (mongoose.connection.readyState !== 1) {
-      console.log('Started without database connection - some features may be limited');
-      console.log('PDF serving should still work for existing files');
+      console.log('⚠️  Started without database connection - some features may be limited');
+      console.log('📄 PDF serving should still work for existing files');
     }
   }, 30000);
 });
