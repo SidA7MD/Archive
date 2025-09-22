@@ -641,7 +641,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
 });
 
 // POST /api/upload - Upload PDF to local storage - COMPLETELY FIXED
-app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
+app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -654,6 +654,15 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
 
     if (!req.file) {
       return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    // Validate required fields after multer processed the form
+    const { semester, type, subject, year } = req.body || {};
+    if (!semester || !type || !subject || !year) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['semester', 'type', 'subject', 'year']
+      });
     }
 
     const session = await mongoose.startSession();
