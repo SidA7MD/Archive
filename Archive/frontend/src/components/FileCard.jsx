@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle } from 'lucide-react';
 
-// Enhanced API Configuration with better production handling
+// Enhanced API Configuration for production
 const API_CONFIG = {
   getBaseURL: () => {
     // Check if we're in browser environment
@@ -12,16 +12,14 @@ const API_CONFIG = {
       return 'http://localhost:5000';
     }
     
-    // For production - try environment variables first
-    const envApiUrl = process.env.REACT_APP_API_URL || 
-                      process.env.VITE_BACKEND_URL || 
-                      process.env.NEXT_PUBLIC_API_URL;
+    // For production - try environment variable first, then use your production API URL
+    const envApiUrl = process.env.REACT_APP_API_URL || process.env.VITE_BACKEND_URL;
     
     if (envApiUrl) {
-      return envApiUrl.replace(/\/$/, ''); // Remove trailing slash
+      return envApiUrl;
     }
     
-    // Fallback to your production API URL
+    // Fallback to your known production API URL
     return 'https://archive-mi73.onrender.com';
   },
   
@@ -38,51 +36,17 @@ const API_CONFIG = {
   testConnection: async () => {
     try {
       const baseURL = API_CONFIG.getBaseURL();
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
       const response = await fetch(`${baseURL}/api/health`, {
         method: 'GET',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
-        },
-        signal: controller.signal
+        }
       });
-      
-      clearTimeout(timeoutId);
       return response.ok;
     } catch (error) {
       console.error('API connection test failed:', error);
       return false;
-    }
-  },
-
-  // Test if a specific file URL is accessible
-  testFileURL: async (url) => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-      
-      const response = await fetch(url, {
-        method: 'HEAD',
-        credentials: 'include',
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      return {
-        accessible: response.ok,
-        status: response.status,
-        contentType: response.headers.get('content-type'),
-        contentLength: response.headers.get('content-length')
-      };
-    } catch (error) {
-      console.error('File URL test failed:', error);
-      return {
-        accessible: false,
-        error: error.message
-      };
     }
   }
 };
@@ -226,8 +190,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const fileIcon = getFileIcon(file.originalName || 'file.txt', breakpoint);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [urlTest, setUrlTest] = useState(null);
-  const [testingUrl, setTestingUrl] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(null);
   
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
 
@@ -239,201 +202,142 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Generate multiple URL options with proper fallback
-  const getFileURLs = () => {
+  // Enhanced URL generation with fallbacks
+  const getFileURL = (type = 'view') => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
-    const urls = {};
-
-    // Direct static file serving (primary method for your server)
-    if (file.fileName) {
-      urls.direct = `${baseUrl}/uploads/${file.fileName}`;
+    
+    // Priority order for different URL types:
+    if (type === 'view') {
+      // For viewing PDFs in browser
+      if (file.viewUrl && file.viewUrl.startsWith('http')) {
+        return file.viewUrl;
+      }
+      if (file.directUrl && file.directUrl.startsWith('http')) {
+        return file.directUrl;
+      }
+      if (file.fileName) {
+        return `${baseUrl}/uploads/${file.fileName}`;
+      }
+      if (file._id) {
+        return `${baseUrl}/api/files/${file._id}/view`;
+      }
+      if (file.filePath) {
+        return file.filePath.startsWith('http') ? file.filePath : `${baseUrl}${file.filePath}`;
+      }
+    } else if (type === 'download') {
+      // For downloading files
+      if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
+        return file.downloadUrl;
+      }
+      if (file._id) {
+        return `${baseUrl}/api/files/${file._id}/download`;
+      }
+      if (file.fileName) {
+        return `${baseUrl}/uploads/${file.fileName}`;
+      }
     }
-
-    // API endpoints
-    if (file._id) {
-      urls.apiView = `${baseUrl}/api/files/${file._id}/view`;
-      urls.apiDownload = `${baseUrl}/api/files/${file._id}/download`;
-    }
-
-    // From file object URLs (if they exist and are absolute)
-    if (file.viewUrl && file.viewUrl.startsWith('http')) {
-      urls.fileView = file.viewUrl;
-    }
-    if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
-      urls.fileDownload = file.downloadUrl;
-    }
-    if (file.directUrl && file.directUrl.startsWith('http')) {
-      urls.fileDirect = file.directUrl;
-    }
-
-    return urls;
+    
+    return null;
   };
 
-  // Test URL accessibility
-  const testURL = async (url) => {
-    setTestingUrl(true);
-    try {
-      const result = await API_CONFIG.testFileURL(url);
-      setUrlTest({ url, ...result });
-      return result.accessible;
-    } catch (error) {
-      setUrlTest({ url, accessible: false, error: error.message });
-      return false;
-    } finally {
-      setTestingUrl(false);
-    }
-  };
-
-  // Enhanced view handler with comprehensive fallback and better error reporting
+  // Enhanced view handler with multiple fallback strategies
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      const urls = getFileURLs();
-      console.log('Available URLs for viewing:', urls);
-      console.log('File details:', {
-        id: file._id,
+      const viewUrl = getFileURL('view');
+      
+      if (!viewUrl) {
+        throw new Error('Aucune URL de visualisation disponible');
+      }
+
+      console.log('🔍 Attempting to view file:', {
         originalName: file.originalName,
-        fileName: file.fileName,
-        filePath: file.filePath
+        fileId: file._id,
+        viewUrl,
+        fileName: file.fileName
       });
 
-      // Priority order for viewing PDFs - API view endpoint first since direct files are 404ing
-      const urlPriority = [
-        urls.apiView,       // API view endpoint (most reliable)
-        urls.direct,        // Direct static file access
-        urls.fileDirect,    // File object direct URL
-        urls.fileView       // File object view URL
-      ].filter(Boolean); // Remove undefined/null URLs
+      setDebugInfo({
+        viewUrl,
+        method: 'Direct browser open',
+        timestamp: new Date().toISOString()
+      });
 
-      if (urlPriority.length === 0) {
-        throw new Error('Aucune URL disponible pour visualiser ce fichier');
-      }
-
-      let successfulUrl = null;
-      let lastError = null;
-      let urlTestResults = [];
-
-      // Try each URL in priority order
-      for (let i = 0; i < urlPriority.length; i++) {
-        const url = urlPriority[i];
-        console.log(`Trying to view file at: ${url}`);
+      // First, try to test if the URL is accessible
+      try {
+        const testResponse = await fetch(viewUrl, {
+          method: 'HEAD',
+          credentials: 'include'
+        });
         
-        try {
-          // Test the URL first
-          const testResult = await testURL(url);
-          urlTestResults.push({ url, ...testResult });
-          
-          if (!testResult.accessible) {
-            console.warn(`URL test failed for ${url} (Status: ${testResult.status || 'unknown'}), trying next URL`);
-            
-            // If this is the last URL and none worked, show detailed error
-            if (i === urlPriority.length - 1) {
-              throw new Error(`Tous les URLs ont échoué. Détails: ${JSON.stringify(urlTestResults, null, 2)}`);
-            }
-            continue;
-          }
-
-          // URL is accessible, try to open it
-          const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
-          
-          if (newWindow) {
-            successfulUrl = url;
-            console.log(`Successfully opened PDF at: ${url}`);
-            break;
-          } else {
-            // Popup blocked, try alternative method
-            const link = document.createElement('a');
-            link.href = url;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            successfulUrl = url;
-            console.log(`Successfully opened PDF via link click at: ${url}`);
-            break;
-          }
-        } catch (err) {
-          console.warn(`Failed to open ${url}:`, err.message);
-          lastError = err;
-          
-          // If this is the last URL, throw the error
-          if (i === urlPriority.length - 1) {
-            throw new Error(`Impossible d'ouvrir le fichier. Détails des tests d'URL: ${JSON.stringify(urlTestResults, null, 2)}. Dernière erreur: ${err.message}`);
-          }
-          continue;
+        console.log('📋 URL accessibility test:', {
+          url: viewUrl,
+          status: testResponse.status,
+          ok: testResponse.ok,
+          headers: Object.fromEntries(testResponse.headers.entries())
+        });
+        
+        if (!testResponse.ok) {
+          console.warn('⚠️ URL test failed, but will try to open anyway');
         }
+      } catch (testError) {
+        console.warn('⚠️ URL test failed:', testError.message, 'but will try to open anyway');
       }
 
-      if (!successfulUrl) {
-        throw new Error(`Impossible d'ouvrir le fichier. Résultats des tests: ${JSON.stringify(urlTestResults, null, 2)}`);
+      // Open the PDF in a new tab
+      const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
+      
+      if (!newWindow) {
+        // Popup blocked, try alternative method
+        const link = document.createElement('a');
+        link.href = viewUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       }
       
     } catch (err) {
-      console.error('Error viewing file:', err);
-      setError(err.message);
+      console.error('❌ Error viewing file:', err);
+      setError(`Erreur lors de la visualisation: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Enhanced download handler with fallback
+  // Enhanced download handler
   const handleDownload = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      const urls = getFileURLs();
-      console.log('Available URLs for download:', urls);
-
-      // Priority order for downloading
-      const downloadPriority = [
-        urls.apiDownload,   // API download endpoint (sets proper headers)
-        urls.fileDownload,  // File object download URL
-        urls.direct,        // Direct static file access
-        urls.fileDirect     // File object direct URL
-      ].filter(Boolean);
-
-      if (downloadPriority.length === 0) {
-        throw new Error('Aucune URL disponible pour télécharger ce fichier');
+      const downloadUrl = getFileURL('download');
+      
+      if (!downloadUrl) {
+        throw new Error('Aucune URL de téléchargement disponible');
       }
 
-      let success = false;
-      let lastError = null;
+      console.log('⬇️ Downloading file:', {
+        originalName: file.originalName,
+        downloadUrl
+      });
 
-      for (const url of downloadPriority) {
-        try {
-          console.log(`Attempting download from: ${url}`);
-          
-          // Create download link
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = file.originalName || 'document.pdf';
-          link.style.display = 'none';
-          
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          
-          success = true;
-          console.log(`Download initiated from: ${url}`);
-          break;
-        } catch (err) {
-          console.warn(`Download failed from ${url}:`, err.message);
-          lastError = err;
-          continue;
-        }
-      }
-
-      if (!success) {
-        throw new Error(`Impossible de télécharger le fichier. Dernière erreur: ${lastError?.message || 'URLs non accessibles'}`);
-      }
+      // Create a temporary link for download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = file.originalName || 'document.pdf';
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       
     } catch (err) {
-      console.error('Error downloading file:', err);
-      setError(err.message);
+      console.error('❌ Error downloading file:', err);
+      setError(`Erreur lors du téléchargement: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -450,7 +354,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     cursor: 'pointer',
     position: 'relative',
     overflow: 'hidden',
-    minHeight: '240px',
+    minHeight: '200px',
     display: 'flex',
     flexDirection: 'column',
   };
@@ -480,10 +384,10 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     WebkitBoxOrient: 'vertical',
   };
 
-  const metaStyles = {
+  const sizeStyles = {
     fontSize: '0.75rem',
     color: '#6b7280',
-    marginBottom: '0.5rem',
+    marginBottom: '1rem',
     display: 'flex',
     alignItems: 'center',
     gap: '0.25rem',
@@ -493,7 +397,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     display: 'flex',
     gap: '0.5rem',
     marginTop: 'auto',
-    paddingTop: '1rem',
   };
 
   const buttonBaseStyles = {
@@ -525,16 +428,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     border: '1px solid rgba(0,0,0,0.1)',
   };
 
-  const testButtonStyles = {
-    ...buttonBaseStyles,
-    background: 'rgba(59, 130, 246, 0.1)',
-    color: '#1d4ed8',
-    border: '1px solid rgba(59, 130, 246, 0.2)',
-    flex: 'none',
-    padding: '0.25rem 0.5rem',
-    fontSize: '0.75rem',
-  };
-
   const errorStyles = {
     background: 'rgba(239, 68, 68, 0.1)',
     color: '#dc2626',
@@ -558,16 +451,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     wordBreak: 'break-all',
   };
 
-  const urlTestStyles = {
-    background: urlTest?.accessible ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-    color: urlTest?.accessible ? '#059669' : '#dc2626',
-    padding: '0.5rem',
-    borderRadius: '6px',
-    fontSize: '0.625rem',
-    marginBottom: '0.5rem',
-    fontFamily: 'monospace',
-  };
-
   return (
     <div style={containerStyles}>
       <div style={headerStyles}>
@@ -579,97 +462,46 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           {file.originalName || 'Document sans nom'}
         </h3>
         
-        <div style={metaStyles}>
-          📊 {formatFileSize(file.fileSize || 0)}
+        <div style={sizeStyles}>
+          <span>📊</span>
+          {formatFileSize(file.fileSize || 0)}
         </div>
 
-        {file.semester && (
-          <div style={metaStyles}>
-            📚 {file.semester.displayName} - {file.type?.displayName} - {file.subject?.name}
+        {/* Development debug info */}
+        {process.env.NODE_ENV === 'development' && debugInfo && (
+          <div style={debugStyles}>
+            <div>URL: {debugInfo.viewUrl}</div>
+            <div>Method: {debugInfo.method}</div>
           </div>
         )}
 
-        {file.year && (
-          <div style={metaStyles}>
-            📅 {file.year.year}
-          </div>
-        )}
-
-        {/* URL Test Results */}
-        {urlTest && (
-          <div style={urlTestStyles}>
-            <div>Test URL: {urlTest.accessible ? '✅ Accessible' : '❌ Non accessible'}</div>
-            {urlTest.contentType && <div>Type: {urlTest.contentType}</div>}
-            {urlTest.error && <div>Erreur: {urlTest.error}</div>}
-          </div>
-        )}
-
-        {/* Enhanced error display with Render-specific guidance */}
+        {/* Error display */}
         {error && (
           <div style={errorStyles}>
             <AlertCircle size={16} />
-            <div>
-              {error}
-              {error.includes('stockage éphémère') && (
-                <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.8 }}>
-                  💡 Tip: Sur Render, les fichiers uploadés peuvent disparaître après un redémarrage. 
-                  Considérez utiliser un stockage cloud comme AWS S3, Cloudinary, ou Google Drive.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Debug info in development */}
-        {process.env.NODE_ENV === 'development' && (
-          <div style={debugStyles}>
-            <div>Base URL: {API_CONFIG.getBaseURL()}</div>
-            <div>File Name: {file.fileName}</div>
-            <div>File ID: {file._id}</div>
-            <div>Available URLs: {Object.keys(getFileURLs()).length}</div>
+            {error}
           </div>
         )}
 
         {/* Action buttons */}
-        <div>
-          {/* Test URL button (development) */}
-          {process.env.NODE_ENV === 'development' && (
-            <div style={{ marginBottom: '0.5rem' }}>
-              <button
-                style={testButtonStyles}
-                onClick={() => {
-                  const urls = getFileURLs();
-                  if (urls.direct) {
-                    testURL(urls.direct);
-                  }
-                }}
-                disabled={testingUrl}
-              >
-                {testingUrl ? <RefreshCw size={14} className="animate-spin" /> : <ExternalLink size={14} />}
-                {testingUrl ? 'Test...' : 'Tester URL'}
-              </button>
-            </div>
-          )}
+        <div style={buttonsContainerStyles}>
+          <button
+            style={viewButtonStyles}
+            onClick={handleView}
+            disabled={loading}
+          >
+            <Eye size={isMobile ? 16 : 18} />
+            {loading ? 'Ouverture...' : 'Visualiser'}
+          </button>
           
-          <div style={buttonsContainerStyles}>
-            <button
-              style={viewButtonStyles}
-              onClick={handleView}
-              disabled={loading}
-            >
-              <Eye size={isMobile ? 16 : 18} />
-              {loading ? 'Ouverture...' : 'Visualiser'}
-            </button>
-            
-            <button
-              style={downloadButtonStyles}
-              onClick={handleDownload}
-              disabled={loading}
-            >
-              <Download size={isMobile ? 16 : 18} />
-              {loading ? 'Téléchargement...' : 'Télécharger'}
-            </button>
-          </div>
+          <button
+            style={downloadButtonStyles}
+            onClick={handleDownload}
+            disabled={loading}
+          >
+            <Download size={isMobile ? 16 : 18} />
+            {loading ? 'Téléchargement...' : 'Télécharger'}
+          </button>
         </div>
       </div>
     </div>
@@ -681,32 +513,16 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
   const [apiStatus, setApiStatus] = useState('checking');
-  const [connectionDetails, setConnectionDetails] = useState(null);
 
   useEffect(() => {
     // Test API connection on mount
     const testAPI = async () => {
       try {
-        const baseURL = API_CONFIG.getBaseURL();
-        const startTime = Date.now();
-        
         const isConnected = await API_CONFIG.testConnection();
-        const responseTime = Date.now() - startTime;
-        
         setApiStatus(isConnected ? 'connected' : 'disconnected');
-        setConnectionDetails({
-          baseURL,
-          responseTime,
-          timestamp: new Date().toISOString()
-        });
       } catch (error) {
         console.error('API test failed:', error);
         setApiStatus('error');
-        setConnectionDetails({
-          baseURL: API_CONFIG.getBaseURL(),
-          error: error.message,
-          timestamp: new Date().toISOString()
-        });
       }
     };
 
@@ -723,7 +539,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
     display: 'grid',
     gridTemplateColumns: isMobile 
       ? '1fr' 
-      : 'repeat(auto-fill, minmax(320px, 1fr))',
+      : 'repeat(auto-fill, minmax(300px, 1fr))',
     gap: '1.5rem',
     marginTop: '1rem',
   };
@@ -808,7 +624,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   const getStatusText = () => {
     switch (apiStatus) {
       case 'connected':
-        return `✅ API Connectée (${connectionDetails?.responseTime}ms)`;
+        return '✅ API Connectée';
       case 'disconnected':
         return '⚠️ API Déconnectée';
       case 'error':
@@ -824,11 +640,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
         <div style={loadingStyles}>
           <div style={spinnerStyles}></div>
           <div>Chargement des fichiers...</div>
-          {connectionDetails && (
-            <div style={{ marginTop: '1rem', fontSize: '0.75rem', color: '#9ca3af' }}>
-              Connexion à {connectionDetails.baseURL}
-            </div>
-          )}
         </div>
         <style jsx>{`
           @keyframes spin {
@@ -851,20 +662,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
           <div style={getStatusBadgeStyles()}>
             {getStatusText()}
           </div>
-          {connectionDetails && (
-            <div style={{
-              background: 'rgba(0,0,0,0.05)',
-              padding: '0.5rem',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
-              fontFamily: 'monospace',
-              marginBottom: '1rem',
-              wordBreak: 'break-all'
-            }}>
-              <div>URL: {connectionDetails.baseURL}</div>
-              {connectionDetails.error && <div>Erreur: {connectionDetails.error}</div>}
-            </div>
-          )}
           {onRetry && (
             <button 
               onClick={onRetry}
@@ -898,19 +695,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
           <div style={getStatusBadgeStyles()}>
             {getStatusText()}
           </div>
-          {connectionDetails && (
-            <div style={{
-              background: 'rgba(0,0,0,0.05)',
-              padding: '0.5rem',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
-              fontFamily: 'monospace',
-              marginTop: '1rem',
-              wordBreak: 'break-all'
-            }}>
-              API: {connectionDetails.baseURL}
-            </div>
-          )}
         </div>
       </div>
     );
@@ -924,25 +708,6 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
           {getStatusText()}
         </div>
       </div>
-
-      {/* Connection details in development */}
-      {process.env.NODE_ENV === 'development' && connectionDetails && (
-        <div style={{
-          background: 'rgba(0,0,0,0.05)',
-          padding: '1rem',
-          borderRadius: '8px',
-          fontSize: '0.75rem',
-          fontFamily: 'monospace',
-          marginBottom: '1rem',
-          wordBreak: 'break-all'
-        }}>
-          <div><strong>Debug Info:</strong></div>
-          <div>Base URL: {connectionDetails.baseURL}</div>
-          <div>Response Time: {connectionDetails.responseTime}ms</div>
-          <div>Timestamp: {connectionDetails.timestamp}</div>
-          {connectionDetails.error && <div>Error: {connectionDetails.error}</div>}
-        </div>
-      )}
 
       <div style={gridStyles}>
         {files.map(file => (
@@ -960,101 +725,25 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   );
 };
 
-// Demo component with production-ready configuration and real API testing
+// Demo component with production-ready PDF files
 const ProductionPDFDemo = () => {
   const [currentFiles, setCurrentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [apiBaseUrl, setApiBaseUrl] = useState('');
 
-  // Initialize API base URL
-  useEffect(() => {
-    const baseUrl = API_CONFIG.getBaseURL();
-    setApiBaseUrl(baseUrl);
-    console.log('Initialized with API base URL:', baseUrl);
-  }, []);
-
-  // Fetch files from actual API
-  const fetchFiles = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const baseUrl = API_CONFIG.getBaseURL();
-      console.log('Fetching files from:', `${baseUrl}/api/files`);
-      
-      // Test API connection first
-      const isConnected = await API_CONFIG.testConnection();
-      if (!isConnected) {
-        throw new Error('Le serveur API n\'est pas accessible. Vérifiez que le serveur est en ligne.');
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
-
-      const response = await fetch(`${baseUrl}/api/files?limit=20`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Erreur serveur (${response.status}): ${errorText || response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log('API Response:', data);
-
-      if (data.files && Array.isArray(data.files)) {
-        setCurrentFiles(data.files);
-        console.log(`Loaded ${data.files.length} files from API`);
-      } else {
-        console.warn('Unexpected API response format:', data);
-        setCurrentFiles([]);
-      }
-      
-    } catch (err) {
-      console.error('Error fetching files:', err);
-      let errorMessage = 'Erreur lors du chargement des fichiers';
-      
-      if (err.name === 'AbortError') {
-        errorMessage = 'Délai d\'attente dépassé. Le serveur met trop de temps à répondre.';
-      } else if (err.message.includes('fetch')) {
-        errorMessage = 'Impossible de se connecter au serveur. Vérifiez votre connexion internet.';
-      } else {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
-      
-      // Fallback to sample data for demo purposes
-      setCurrentFiles(getSampleFiles());
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Sample files that match your actual API structure
-  const getSampleFiles = () => [
+  // Updated sample files based on your actual API response
+  const sampleProductionFiles = [
     {
-      _id: "675b4903c49b87ce3ab38db3",
-      originalName: "Cours_Algebre_Lineaire.pdf",
-      fileName: "1755007235029-cours-algebre.pdf",
-      filePath: "/uploads/1755007235029-cours-algebre.pdf",
-      fileSize: 2847592,
+      _id: "689b4903c49b87ce3ab38db3",
+      originalName: "TP1-.pdf",
+      fileName: "1755007235029-854920657.pdf",
+      filePath: "uploads/1755007235029-854920657.pdf",
+      fileSize: 93110,
       mimeType: "application/pdf",
       storageProvider: "local",
-      uploadedAt: "2024-12-12T14:00:35.779Z",
-      viewUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235029-cours-algebre.pdf`,
-      downloadUrl: `${API_CONFIG.getBaseURL()}/api/files/675b4903c49b87ce3ab38db3/download`,
-      directUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235029-cours-algebre.pdf`,
+      uploadedAt: "2025-08-12T14:00:35.779Z",
+      viewUrl: "https://archive-mi73.onrender.com/uploads/1755007235029-854920657.pdf",
+      downloadUrl: "https://archive-mi73.onrender.com/api/files/689b4903c49b87ce3ab38db3/download",
       fileType: "pdf",
       semester: {
         _id: "6898bf64e823136d8dc4c573",
@@ -1068,86 +757,87 @@ const ProductionPDFDemo = () => {
       },
       subject: {
         _id: "689a5bb76f501aa7a841f63b",
-        name: "Algebre Lineaire"
+        name: "Algebre"
       },
       year: {
         _id: "689a5bb86f501aa7a841f63e",
-        year: 2024
+        year: "2021"
       }
     },
     {
-      _id: "675b4903c49b87ce3ab38db4",
-      originalName: "TD_Analyse_Mathematique.pdf",
-      fileName: "1755007235030-td-analyse.pdf",
-      filePath: "/uploads/1755007235030-td-analyse.pdf",
-      fileSize: 1256789,
+      _id: "689b4903c49b87ce3ab38db4",
+      originalName: "Arithmetique dans Z.pdf",
+      fileName: "1755007235030-854920658.pdf",
+      filePath: "uploads/1755007235030-854920658.pdf",
+      fileSize: 104920,
       mimeType: "application/pdf",
       storageProvider: "local",
-      uploadedAt: "2024-12-12T15:30:20.123Z",
-      viewUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235030-td-analyse.pdf`,
-      downloadUrl: `${API_CONFIG.getBaseURL()}/api/files/675b4903c49b87ce3ab38db4/download`,
-      directUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235030-td-analyse.pdf`,
+      uploadedAt: "2025-08-12T15:30:20.123Z",
+      viewUrl: "https://archive-mi73.onrender.com/uploads/1755007235030-854920658.pdf",
+      downloadUrl: "https://archive-mi73.onrender.com/api/files/689b4903c49b87ce3ab38db4/download",
       fileType: "pdf",
       semester: {
-        _id: "6898bf64e823136d8dc4c574",
-        name: "S2",
-        displayName: "Semestre 2"
+        _id: "6898bf64e823136d8dc4c573",
+        name: "S1",
+        displayName: "Semestre 1"
       },
       type: {
-        _id: "689a5bb76f501aa7a841f639",
-        name: "td",
-        displayName: "Travaux Dirigés"
+        _id: "689a5bb76f501aa7a841f638",
+        name: "cours",
+        displayName: "Cours"
       },
       subject: {
-        _id: "689a5bb76f501aa7a841f63c",
-        name: "Analyse Mathematique"
+        _id: "689a5bb76f501aa7a841f63b",
+        name: "Mathematiques"
       },
       year: {
-        _id: "689a5bb86f501aa7a841f63f",
-        year: 2024
-      }
-    },
-    {
-      _id: "675b4903c49b87ce3ab38db5",
-      originalName: "Examen_Physique_2023.pdf",
-      fileName: "1755007235031-examen-physique.pdf",
-      filePath: "/uploads/1755007235031-examen-physique.pdf",
-      fileSize: 892456,
-      mimeType: "application/pdf",
-      storageProvider: "local",
-      uploadedAt: "2024-12-11T09:15:45.567Z",
-      viewUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235031-examen-physique.pdf`,
-      downloadUrl: `${API_CONFIG.getBaseURL()}/api/files/675b4903c49b87ce3ab38db5/download`,
-      directUrl: `${API_CONFIG.getBaseURL()}/uploads/1755007235031-examen-physique.pdf`,
-      fileType: "pdf",
-      semester: {
-        _id: "6898bf64e823136d8dc4c575",
-        name: "S3",
-        displayName: "Semestre 3"
-      },
-      type: {
-        _id: "689a5bb76f501aa7a841f640",
-        name: "compositions",
-        displayName: "Compositions"
-      },
-      subject: {
-        _id: "689a5bb76f501aa7a841f63d",
-        name: "Physique"
-      },
-      year: {
-        _id: "689a5bb86f501aa7a841f640",
-        year: 2023
+        _id: "689a5bb86f501aa7a841f63e",
+        year: "2021"
       }
     }
   ];
 
-  // Fetch files on component mount
+  // Simulate API loading
   useEffect(() => {
-    fetchFiles();
+    const timer = setTimeout(() => {
+      // Simulate occasional API errors for testing
+      const success = Math.random() > 0.1; // 90% success rate
+      
+      if (success) {
+        setCurrentFiles(sampleProductionFiles);
+        setError(null);
+      } else {
+        setError('Impossible de se connecter au serveur. Vérifiez que https://archive-mi73.onrender.com est accessible.');
+      }
+      setLoading(false);
+    }, 1500);
+
+    return () => clearTimeout(timer);
   }, []);
 
-  const handleRetry = () => {
-    fetchFiles();
+  const handleRetry = async () => {
+    setLoading(true);
+    setError(null);
+    setCurrentFiles([]);
+    
+    // Test actual API connection
+    try {
+      const isConnected = await API_CONFIG.testConnection();
+      
+      setTimeout(() => {
+        if (isConnected) {
+          setCurrentFiles(sampleProductionFiles);
+        } else {
+          setError('Le serveur API ne répond pas. Vérifiez votre connexion internet et que le serveur https://archive-mi73.onrender.com est en ligne.');
+        }
+        setLoading(false);
+      }, 1000);
+    } catch (err) {
+      setTimeout(() => {
+        setError(`Erreur de connexion: ${err.message}`);
+        setLoading(false);
+      }, 1000);
+    }
   };
 
   return (
@@ -1171,7 +861,7 @@ const ProductionPDFDemo = () => {
           textAlign: 'center'
         }}>
           <h1 style={{ margin: 0, fontSize: '2rem', marginBottom: '0.5rem' }}>
-            Archive Universitaire
+            📚 Archive Universitaire
           </h1>
           <p style={{ margin: 0, opacity: 0.9, fontSize: '1.1rem' }}>
             Système de gestion de fichiers avec stockage local - Version Production
@@ -1182,10 +872,9 @@ const ProductionPDFDemo = () => {
             borderRadius: '20px',
             marginTop: '1rem',
             display: 'inline-block',
-            fontSize: '0.875rem',
-            wordBreak: 'break-all'
+            fontSize: '0.875rem'
           }}>
-            API: {apiBaseUrl}
+            API: {API_CONFIG.getBaseURL()}
           </div>
         </div>
         
@@ -1194,7 +883,7 @@ const ProductionPDFDemo = () => {
           loading={loading} 
           error={error}
           onRetry={handleRetry}
-          apiBaseUrl={apiBaseUrl}
+          apiBaseUrl={API_CONFIG.getBaseURL()}
         />
       </div>
     </div>

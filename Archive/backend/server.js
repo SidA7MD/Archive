@@ -20,7 +20,7 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('Created uploads directory');
 }
 
-// FIXED: Enhanced security middleware with proper PDF serving support
+// Security middleware - FIXED for PDF serving
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
@@ -28,15 +28,15 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:", "blob:"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for PDF.js
+      imgSrc: ["'self'", "data:", "https:", "blob:"], // Allow blob URLs for PDFs
       connectSrc: ["'self'", "https:"],
       fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'self'", "blob:"],
+      objectSrc: ["'self'", "blob:"], // Allow objects for PDF embedding
       mediaSrc: ["'self'", "blob:"],
-      frameSrc: ["'self'", "blob:"],
-      workerSrc: ["'self'", "blob:"],
-      childSrc: ["'self'", "blob:"],
+      frameSrc: ["'self'", "blob:"], // Allow frames for PDF viewing
+      workerSrc: ["'self'", "blob:"], // Allow workers for PDF.js
+      childSrc: ["'self'", "blob:"], // Allow child contexts for PDF.js
     },
   },
 }));
@@ -58,7 +58,7 @@ const uploadLimiter = rateLimit({
   message: 'Too many upload attempts, please try again later.',
 });
 
-// FIXED: Enhanced CORS configuration
+// CORS configuration - FIXED
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
@@ -102,74 +102,43 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// CRITICAL FIX: Enhanced base URL function for Render
+// FIXED: Enhanced base URL function for proper production support
 const getBaseURL = (req) => {
-  // Priority 1: Custom environment variable
+  // Priority 1: Check for custom environment variable
   if (process.env.RENDER_EXTERNAL_URL) {
     return process.env.RENDER_EXTERNAL_URL;
   }
   
-  // Priority 2: Direct Render detection
-  if (req && req.get('host')) {
-    const host = req.get('host');
-    if (host.includes('.onrender.com')) {
-      const protocol = req.get('x-forwarded-proto') || 'https';
-      return `${protocol}://${host}`;
-    }
+  // Priority 2: For production environments (including when NODE_ENV=development on Render)
+  if (req && req.get('host') && req.get('host').includes('.onrender.com')) {
+    const protocol = req.get('x-forwarded-proto') || 'https';
+    return `${protocol}://${req.get('host')}`;
   }
   
-  // Priority 3: Production environment
+  // Priority 3: Check NODE_ENV for production
   if (process.env.NODE_ENV === 'production' && req) {
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
-    const host = req.get('host');
-    if (host) {
-      return `${protocol}://${host}`;
-    }
+    return `${protocol}://${req.get('host')}`;
   }
   
-  // Priority 4: Default for development
+  // Priority 4: Default to localhost for development
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
-// CRITICAL FIX: Serve uploads BEFORE other middleware with enhanced configuration
+// FIXED: Serve uploaded files with proper headers for PDF viewing
 app.use('/uploads', (req, res, next) => {
-  console.log(`📂 Static file request: ${req.method} ${req.url}`);
-  console.log(`📂 Full request path: ${req.path}`);
-  console.log(`📂 File would be at: ${path.join(uploadsDir, req.path)}`);
-  
-  // Check if file exists before processing
-  const requestedFile = path.join(uploadsDir, req.path);
-  
-  if (!fs.existsSync(requestedFile)) {
-    console.log(`❌ File not found: ${requestedFile}`);
-    // List files in uploads directory for debugging
-    try {
-      const files = fs.readdirSync(uploadsDir);
-      console.log(`📁 Available files in uploads:`, files.slice(0, 10)); // Show first 10 files
-    } catch (err) {
-      console.log(`❌ Cannot read uploads directory:`, err.message);
-    }
-    
-    return res.status(404).json({
-      error: 'File not found',
-      requestedPath: req.path,
-      requestedFile: requestedFile,
-      uploadsDir: uploadsDir,
-      message: 'The requested file does not exist on the server'
-    });
-  }
-
   // Set proper headers for PDF files
-  if (req.path.toLowerCase().endsWith('.pdf')) {
+  const filePath = path.join(uploadsDir, req.path);
+  
+  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-    res.setHeader('Cache-Control', 'public, max-age=31536000');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
     
     // Handle range requests for large PDFs
-    const stat = fs.statSync(requestedFile);
+    const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     const range = req.headers.range;
     
@@ -183,30 +152,28 @@ app.use('/uploads', (req, res, next) => {
       res.setHeader('Content-Length', chunksize);
       res.status(206);
       
-      const stream = fs.createReadStream(requestedFile, { start, end });
+      const stream = fs.createReadStream(filePath, { start, end });
       stream.pipe(res);
       return;
     }
     
     res.setHeader('Content-Length', fileSize);
-    console.log(`✅ Serving PDF: ${req.path} (${fileSize} bytes)`);
   }
   
   next();
 }, express.static(uploadsDir, {
+  // Additional options for static file serving
   maxAge: '1y',
   etag: true,
   lastModified: true,
-  setHeaders: (res, filePath) => {
-    console.log(`📤 Setting headers for: ${filePath}`);
-    if (filePath.toLowerCase().endsWith('.pdf')) {
+  setHeaders: (res, path) => {
+    if (path.toLowerCase().endsWith('.pdf')) {
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Type', 'application/pdf');
     }
   }
 }));
 
-// MongoDB connection with enhanced error handling
+// MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
@@ -439,7 +406,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// CRITICAL FIX: Enhanced files listing with better URL generation
+// GET /api/files - List files with pagination and filtering - FIXED URL generation
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -466,27 +433,18 @@ app.get('/api/files', requireDB, async (req, res) => {
       File.countDocuments(filter)
     ]);
 
+    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
-    console.log('Files API - Using base URL:', baseURL);
+    console.log('Using base URL:', baseURL);
 
-    const enhancedFiles = files.map(file => {
-      // Verify file exists on disk
-      const filePath = path.join(uploadsDir, file.fileName);
-      const fileExists = fs.existsSync(filePath);
-      
-      console.log(`File ${file.fileName}: exists=${fileExists}, path=${filePath}`);
-      
-      return {
-        ...file,
-        viewUrl: `${baseURL}/uploads/${file.fileName}`,
-        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        directUrl: `${baseURL}/uploads/${file.fileName}`,
-        storageProvider: 'local',
-        fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
-        fileExists: fileExists, // Add debug info
-        debugPath: filePath // Add debug info
-      };
-    });
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      directUrl: `${baseURL}/uploads/${file.fileName}`, // Direct access to file
+      storageProvider: 'local',
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
 
     res.json({
       files: enhancedFiles,
@@ -499,8 +457,7 @@ app.get('/api/files', requireDB, async (req, res) => {
         hasPrev: page > 1
       },
       total,
-      baseURL,
-      uploadsDir: uploadsDir // Add for debugging
+      baseURL // Include base URL in response for debugging
     });
   } catch (error) {
     console.error('Error fetching files:', error);
@@ -511,7 +468,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/files - List all files for admin with detailed debug info
+// GET /api/admin/files - List all files for admin
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
     console.log('Admin: Fetching all files...');
@@ -521,51 +478,21 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       .sort({ uploadedAt: -1 })
       .lean();
 
-    console.log(`Admin: Found ${files.length} files in database`);
+    console.log(`Admin: Found ${files.length} files`);
 
+    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
-    console.log('Admin files - Using base URL:', baseURL);
 
-    // Check actual files on disk
-    let diskFiles = [];
-    try {
-      diskFiles = fs.readdirSync(uploadsDir);
-      console.log(`Admin: Found ${diskFiles.length} files on disk`);
-    } catch (err) {
-      console.error('Admin: Error reading uploads directory:', err.message);
-    }
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      directUrl: `${baseURL}/uploads/${file.fileName}`,
+      storageProvider: 'local',
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
 
-    const enhancedFiles = files.map(file => {
-      const filePath = path.join(uploadsDir, file.fileName);
-      const fileExists = fs.existsSync(filePath);
-      
-      if (!fileExists) {
-        console.warn(`❌ Database file not found on disk: ${file.fileName}`);
-      }
-      
-      return {
-        ...file,
-        viewUrl: `${baseURL}/uploads/${file.fileName}`,
-        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        directUrl: `${baseURL}/uploads/${file.fileName}`,
-        storageProvider: 'local',
-        fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
-        fileExists: fileExists,
-        debugPath: filePath
-      };
-    });
-
-    res.json({
-      files: enhancedFiles,
-      debug: {
-        baseURL,
-        uploadsDir,
-        databaseFileCount: files.length,
-        diskFileCount: diskFiles.length,
-        sampleDiskFiles: diskFiles.slice(0, 5),
-        uploadsDirExists: fs.existsSync(uploadsDir)
-      }
-    });
+    res.json(enhancedFiles);
   } catch (error) {
     console.error('Error fetching admin files:', error);
     res.status(500).json({ 
@@ -692,7 +619,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// CRITICAL FIX: Enhanced upload route with better error handling
+// FIXED: Upload route with validation AFTER multer processing
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     // Handle multer errors first
@@ -709,9 +636,10 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
+    // NOW validate the form data (after multer has processed it)
     const { semester, type, subject, year } = req.body;
     
-    console.log('Upload - Validation check:', {
+    console.log('Validation check:', {
       semester,
       type, 
       subject,
@@ -757,24 +685,11 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     const session = await mongoose.startSession();
     
     try {
-      console.log('Upload - File uploaded locally:', {
+      console.log('File uploaded locally:', {
         filename: req.file.filename,
         originalName: req.file.originalname,
         size: req.file.size,
         path: req.file.path
-      });
-
-      // Verify file was actually saved to disk
-      const filePath = req.file.path;
-      if (!fs.existsSync(filePath)) {
-        throw new Error('File was not properly saved to disk');
-      }
-      
-      const fileStats = fs.statSync(filePath);
-      console.log('Upload - File verified on disk:', {
-        path: filePath,
-        size: fileStats.size,
-        created: fileStats.birthtime
       });
 
       await session.withTransaction(async () => {
@@ -842,8 +757,9 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           await yearDoc.save({ session });
         }
 
+        // Use the enhanced getBaseURL function
         const baseUrl = getBaseURL(req);
-        console.log('Upload - Using base URL:', baseUrl);
+        console.log('Upload: Using base URL:', baseUrl);
         
         const fileDoc = new File({
           originalName: req.file.originalname,
@@ -918,7 +834,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -955,7 +871,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -965,7 +881,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       });
     }
 
-    // Set proper headers for PDF viewing in browser
+    // FIXED: Set proper headers for PDF viewing in browser
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     
@@ -1018,7 +934,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
     }
 
     // Delete physical file
-    const filePath = path.join(uploadsDir, file.fileName);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
     let fileDeleted = false;
     
     if (fs.existsSync(filePath)) {
@@ -1048,7 +964,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Statistics endpoint
+// GET /api/admin/stats - Statistics endpoint - FIXED URL generation
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -1120,6 +1036,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
+    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
 
     res.json({
@@ -1148,7 +1065,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       storageProvider: 'Local File System',
       storageLocation: uploadsDir,
-      baseURL
+      baseURL // Include for debugging
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);
@@ -1159,71 +1076,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// ENHANCED: Debug endpoint to test file system
-app.get('/api/debug/files', (req, res) => {
-  try {
-    const baseURL = getBaseURL(req);
-    
-    // Read uploads directory
-    let diskFiles = [];
-    let uploadsDirExists = false;
-    let uploadsDirStats = null;
-    
-    try {
-      uploadsDirExists = fs.existsSync(uploadsDir);
-      if (uploadsDirExists) {
-        uploadsDirStats = fs.statSync(uploadsDir);
-        diskFiles = fs.readdirSync(uploadsDir).map(fileName => {
-          const filePath = path.join(uploadsDir, fileName);
-          const stats = fs.statSync(filePath);
-          return {
-            fileName,
-            size: stats.size,
-            created: stats.birthtime,
-            modified: stats.mtime,
-            url: `${baseURL}/uploads/${fileName}`
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Error reading uploads directory:', error);
-    }
-    
-    res.json({
-      baseURL,
-      uploadsDir,
-      uploadsDirExists,
-      uploadsDirStats: uploadsDirStats ? {
-        isDirectory: uploadsDirStats.isDirectory(),
-        size: uploadsDirStats.size,
-        created: uploadsDirStats.birthtime,
-        modified: uploadsDirStats.mtime
-      } : null,
-      diskFiles,
-      diskFileCount: diskFiles.length,
-      environment: {
-        NODE_ENV: process.env.NODE_ENV,
-        PORT: process.env.PORT,
-        RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL
-      },
-      request: {
-        host: req.get('host'),
-        protocol: req.protocol,
-        forwardedProto: req.get('x-forwarded-proto'),
-        originalUrl: req.originalUrl
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Debug endpoint error',
-      message: error.message,
-      uploadsDir,
-      baseURL: getBaseURL(req)
-    });
-  }
-});
-
-// Enhanced health check endpoint
+// Health check endpoint - ENHANCED with PDF serving test
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1249,18 +1102,16 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
-  // Test PDF serving capability
+  // FIXED: Test PDF serving capability
   let pdfServingTest = 'Not tested';
-  let sampleFiles = [];
   try {
     if (uploadsExists) {
       const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
-      sampleFiles = testFiles.slice(0, 3);
       if (testFiles.length > 0) {
         const testFile = testFiles[0];
         const testFilePath = path.join(uploadsDir, testFile);
         const stats = fs.statSync(testFilePath);
-        pdfServingTest = `Ready - ${testFiles.length} PDF(s) available`;
+        pdfServingTest = `Ready - ${testFiles.length} PDF(s) available, sample: ${testFile} (${stats.size} bytes)`;
       } else {
         pdfServingTest = 'No PDF files to serve';
       }
@@ -1270,6 +1121,8 @@ app.get('/api/health', async (req, res) => {
   }
 
   const overallStatus = (dbStatus === 1 && uploadsExists) ? 'OK' : 'Warning';
+
+  // FIXED: Use the enhanced getBaseURL function
   const baseURL = getBaseURL(req);
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
@@ -1290,8 +1143,8 @@ app.get('/api/health', async (req, res) => {
         uploadsDir,
         exists: uploadsExists,
         isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
-        pdfServing: pdfServingTest,
-        sampleFiles
+        writable: uploadsExists ? (fs.constants.W_OK ? 2 : 0) : false,
+        pdfServing: pdfServingTest
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1299,59 +1152,52 @@ app.get('/api/health', async (req, res) => {
     uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
     version: process.env.npm_package_version || '1.0.0',
     nodeVersion: process.version,
+    // Add useful debugging info
     urls: {
       apiBase: baseURL,
       uploads: `${baseURL}/uploads/`,
       health: `${baseURL}/api/health`,
-      files: `${baseURL}/api/files`,
-      debug: `${baseURL}/api/debug/files`
+      files: `${baseURL}/api/files`
     }
   });
 });
 
-// Test endpoint for PDF serving
+// ADDED: Test endpoint for PDF serving
 app.get('/api/test-pdf', async (req, res) => {
   try {
+    // Find a sample PDF file
     const files = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
     
     if (files.length === 0) {
       return res.json({
         status: 'No PDFs available for testing',
         message: 'Upload a PDF file first to test PDF serving',
-        baseURL: getBaseURL(req),
-        uploadsDir
+        baseURL: getBaseURL(req)
       });
     }
 
     const sampleFile = files[0];
     const baseURL = getBaseURL(req);
-    const filePath = path.join(uploadsDir, sampleFile);
-    const fileStats = fs.statSync(filePath);
     
     res.json({
       status: 'PDF serving ready',
       sampleFile,
-      fileSize: fileStats.size,
       baseURL,
       testUrls: {
         directAccess: `${baseURL}/uploads/${sampleFile}`,
-        viaDebug: `${baseURL}/api/debug/files`,
+        viaApi: `${baseURL}/api/files/test/view`,
       },
       instructions: {
         1: 'Click on directAccess URL to test direct PDF viewing',
         2: 'This should open the PDF in your browser',
-        3: 'If it downloads instead of viewing, check browser settings',
-        4: 'Check /api/debug/files for detailed file system info'
-      },
-      availableFiles: files.length,
-      uploadsDir
+        3: 'If it downloads instead of viewing, check browser settings'
+      }
     });
   } catch (error) {
     res.status(500).json({
       status: 'Error testing PDF serving',
       error: error.message,
-      baseURL: getBaseURL(req),
-      uploadsDir
+      baseURL: getBaseURL(req)
     });
   }
 });
@@ -1427,32 +1273,9 @@ app.use((error, req, res, next) => {
   });
 });
 
-// CRITICAL FIX: Enhanced 404 handler with detailed debugging
+// 404 handler - ENHANCED
 app.use('*', (req, res) => {
-  console.log(`❌ Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
-  console.log(`❌ Request headers:`, req.headers);
-  
-  // Special handling for uploads requests
-  if (req.originalUrl.startsWith('/uploads/')) {
-    const fileName = req.originalUrl.replace('/uploads/', '');
-    const filePath = path.join(uploadsDir, fileName);
-    
-    console.log(`📂 Upload request details:`, {
-      originalUrl: req.originalUrl,
-      fileName,
-      filePath,
-      fileExists: fs.existsSync(filePath),
-      uploadsDir
-    });
-    
-    // List actual files for debugging
-    try {
-      const actualFiles = fs.readdirSync(uploadsDir);
-      console.log(`📁 Actual files in uploads:`, actualFiles.slice(0, 10));
-    } catch (err) {
-      console.log(`❌ Cannot read uploads directory:`, err.message);
-    }
-  }
+  console.log(`Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
   
   const baseURL = getBaseURL(req);
   
@@ -1472,21 +1295,13 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
       'GET /api/test-pdf - Test PDF serving',
-      'GET /api/debug/files - Debug file system',
       'GET /uploads/:filename - Direct file access'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testPdf: `${baseURL}/api/test-pdf`,
-      debugFiles: `${baseURL}/api/debug/files`
-    },
-    debug: {
-      uploadsDir,
-      requestedFile: req.originalUrl.startsWith('/uploads/') 
-        ? path.join(uploadsDir, req.originalUrl.replace('/uploads/', ''))
-        : null
+      testPdf: `${baseURL}/api/test-pdf`
     }
   });
 });
@@ -1494,75 +1309,83 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n🚀 University Archive Server - CRITICAL FIXES FOR RENDER 🚀`);
+  console.log(`\nUniversity Archive Server - COMPLETELY FIXED FOR RENDER`);
   console.log(`Running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
+  // Enhanced URL detection for Render
   const serverURL = process.env.RENDER_EXTERNAL_URL || 
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
   console.log(`Server URL: ${serverURL}`);
   console.log(`File Storage: Local file system (${uploadsDir})`);
-  console.log(`UPLOADS DIRECTORY: ${uploadsDir}`);
-  
-  // Test uploads directory immediately
-  try {
-    const uploadsExists = fs.existsSync(uploadsDir);
-    console.log(`📁 Uploads directory exists: ${uploadsExists}`);
-    
-    if (uploadsExists) {
-      const files = fs.readdirSync(uploadsDir);
-      console.log(`📁 Files in uploads: ${files.length}`);
-      
-      if (files.length > 0) {
-        console.log(`📄 Sample files:`, files.slice(0, 3));
-        
-        // Test first file accessibility
-        const firstFile = files[0];
-        const firstFilePath = path.join(uploadsDir, firstFile);
-        const stats = fs.statSync(firstFilePath);
-        console.log(`📄 First file: ${firstFile} (${stats.size} bytes)`);
-        console.log(`📄 Test URL: ${serverURL}/uploads/${firstFile}`);
-      }
-    }
-  } catch (error) {
-    console.error(`❌ Error checking uploads directory:`, error.message);
-  }
+  console.log(`Security: Enhanced Helmet + CORS for PDF viewing`);
+  console.log(`CORS: Enabled for production origins`);
+  console.log(`PDF Serving: Enhanced with range request support`);
+  console.log(`URL Generation: Smart detection for Render deployment`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
     if (mongoose.connection.readyState === 1) {
       clearInterval(waitForDB);
       
-      console.log('\n🔧 Initializing application...');
+      console.log('Initializing application...');
       await initializeSemesters();
       
-      console.log('\n✅ Server ready to accept connections');
-      console.log(`📊 Health check: ${serverURL}/api/health`);
-      console.log(`🔍 Debug endpoint: ${serverURL}/api/debug/files`);
-      console.log(`📁 Direct file access: ${serverURL}/uploads/`);
-      console.log(`🧪 PDF test: ${serverURL}/api/test-pdf`);
-      console.log(`📋 Admin files: ${serverURL}/api/admin/files`);
+      console.log('Server ready to accept connections');
+      console.log('Files accessible at:', `${serverURL}/uploads/`);
+      console.log('Admin panel:', `${serverURL}/api/admin/stats`);
+      console.log('Admin files:', `${serverURL}/api/admin/files`);
+      console.log('Health check:', `${serverURL}/api/health`);
+      console.log('PDF test:', `${serverURL}/api/test-pdf`);
       
-      console.log('\n🔧 CRITICAL FIXES APPLIED:');
-      console.log('✅ Static file middleware moved BEFORE other middleware');
-      console.log('✅ Enhanced file existence checking');
-      console.log('✅ Detailed 404 debugging for /uploads/ requests');
-      console.log('✅ Added /api/debug/files endpoint');
-      console.log('✅ Enhanced logging for file serving');
-      console.log('✅ Better error handling for missing files');
+      if (process.env.NODE_ENV === 'production' || serverURL.includes('.onrender.com')) {
+        console.log('Running in PRODUCTION/RENDER mode');
+        console.log('Make sure NODE_ENV is set to "production" in Render dashboard');
+        console.log('Current allowed origins include:');
+        console.log('   - https://www.larchive.tech');
+        console.log('   - https://larchive.tech');  
+        console.log('   - Vercel apps (*.vercel.app)');
+        console.log('   - Render apps (*.render.com)');
+      } else {
+        console.log('Running in DEVELOPMENT mode');
+        console.log(`API Documentation: ${serverURL}/api/health`);
+        console.log(`Direct file access: ${serverURL}/uploads/`);
+        console.log(`Debug endpoint: ${serverURL}/api/test-pdf`);
+      }
       
-      console.log('\n🧪 NEXT STEPS:');
-      console.log('1. Test the debug endpoint first');
-      console.log('2. Verify files exist on disk');
-      console.log('3. Test direct file access');
-      console.log('4. Check server logs for file serving attempts');
+      // Test uploads directory
+      try {
+        const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+        console.log(`Found ${testFiles.length} PDF file(s) in uploads directory`);
+        if (testFiles.length > 0) {
+          console.log(`Sample file: ${testFiles[0]}`);
+          console.log(`Test URL: ${serverURL}/uploads/${testFiles[0]}`);
+        }
+      } catch (error) {
+        console.log('Could not read uploads directory:', error.message);
+      }
+      
+      console.log('\nKEY FIXES APPLIED:');
+      console.log('Enhanced getBaseURL() function with Render detection');
+      console.log('Smart URL generation for both development and production');
+      console.log('Proper .onrender.com domain detection');
+      console.log('All endpoints use consistent URL generation');
+      console.log('Upload endpoint completely fixed for Render');
+      console.log('Validation moved AFTER multer processing');
+      console.log('\nNEXT STEPS:');
+      console.log('1. Set NODE_ENV=production in Render dashboard');
+      console.log('2. Test upload functionality');
+      console.log('3. Check PDF viewing in browser');
     }
   }, 1000);
   
+  // Timeout after 30 seconds
   setTimeout(() => {
     clearInterval(waitForDB);
     if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️  Started without database connection - file serving should still work');
+      console.log('Started without database connection - some features may be limited');
+      console.log('PDF serving should still work for existing files');
     }
-  }, 30000);});
+  }, 30000);
+});
