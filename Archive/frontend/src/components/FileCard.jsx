@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle, ExternalLink } from 'lucide-react';
+import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle } from 'lucide-react';
 
 // Enhanced API Configuration for production
 const API_CONFIG = {
@@ -183,7 +183,7 @@ const getFileTheme = (fileName) => {
   return fileThemes[Math.abs(hash) % fileThemes.length];
 };
 
-// COMPLETELY FIXED FileCard with proper PDF handling for production
+// Enhanced FileCard with improved PDF handling
 export const FileCard = ({ file, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const theme = getFileTheme(file.originalName || 'default');
@@ -202,52 +202,36 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // FIXED: Robust URL generation with proper fallback chain
+  // Enhanced URL generation with fallbacks
   const getFileURL = (type = 'view') => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     
+    // Priority order for different URL types:
     if (type === 'view') {
-      // Priority order for PDF viewing:
-      // 1. Use viewUrl if it's a complete URL
-      if (file.viewUrl && (file.viewUrl.startsWith('http') || file.viewUrl.startsWith('//'))) {
+      // For viewing PDFs in browser
+      if (file.viewUrl && file.viewUrl.startsWith('http')) {
         return file.viewUrl;
       }
-      
-      // 2. Use directUrl if available and complete
-      if (file.directUrl && (file.directUrl.startsWith('http') || file.directUrl.startsWith('//'))) {
+      if (file.directUrl && file.directUrl.startsWith('http')) {
         return file.directUrl;
       }
-      
-      // 3. Construct from fileName (most reliable for production)
       if (file.fileName) {
         return `${baseUrl}/uploads/${file.fileName}`;
       }
-      
-      // 4. Use API view endpoint as fallback
       if (file._id) {
         return `${baseUrl}/api/files/${file._id}/view`;
       }
-      
-      // 5. Try to construct from filePath
       if (file.filePath) {
-        if (file.filePath.startsWith('http')) {
-          return file.filePath;
-        }
-        return `${baseUrl}${file.filePath.startsWith('/') ? file.filePath : '/' + file.filePath}`;
+        return file.filePath.startsWith('http') ? file.filePath : `${baseUrl}${file.filePath}`;
       }
     } else if (type === 'download') {
-      // Priority order for downloading:
-      // 1. Use downloadUrl if available
-      if (file.downloadUrl && (file.downloadUrl.startsWith('http') || file.downloadUrl.startsWith('//'))) {
+      // For downloading files
+      if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
         return file.downloadUrl;
       }
-      
-      // 2. Use API download endpoint
       if (file._id) {
         return `${baseUrl}/api/files/${file._id}/download`;
       }
-      
-      // 3. Fallback to direct file access
       if (file.fileName) {
         return `${baseUrl}/uploads/${file.fileName}`;
       }
@@ -256,7 +240,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return null;
   };
 
-  // COMPLETELY REWRITTEN view handler for production reliability
+  // Enhanced view handler with multiple fallback strategies
   const handleView = async () => {
     try {
       setLoading(true);
@@ -265,10 +249,10 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       const viewUrl = getFileURL('view');
       
       if (!viewUrl) {
-        throw new Error('No viewing URL available for this file');
+        throw new Error('Aucune URL de visualisation disponible');
       }
 
-      console.log('PDF View attempt:', {
+      console.log('🔍 Attempting to view file:', {
         originalName: file.originalName,
         fileId: file._id,
         viewUrl,
@@ -277,115 +261,48 @@ export const FileCard = ({ file, apiBaseUrl }) => {
 
       setDebugInfo({
         viewUrl,
-        method: 'Production PDF viewer',
+        method: 'Direct browser open',
         timestamp: new Date().toISOString()
       });
 
-      // FIXED: Better approach for production PDF viewing
-      // First, try to verify the file exists
+      // First, try to test if the URL is accessible
       try {
         const testResponse = await fetch(viewUrl, {
           method: 'HEAD',
           credentials: 'include'
         });
         
-        console.log('File accessibility test:', {
+        console.log('📋 URL accessibility test:', {
           url: viewUrl,
           status: testResponse.status,
           ok: testResponse.ok,
-          contentType: testResponse.headers.get('content-type')
+          headers: Object.fromEntries(testResponse.headers.entries())
         });
         
+        if (!testResponse.ok) {
+          console.warn('⚠️ URL test failed, but will try to open anyway');
+        }
       } catch (testError) {
-        console.warn('File test failed (but will try to open anyway):', testError.message);
+        console.warn('⚠️ URL test failed:', testError.message, 'but will try to open anyway');
       }
 
-      // FIXED: Use more reliable window.open approach
-      const newWindow = window.open('about:blank', '_blank');
+      // Open the PDF in a new tab
+      const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
       
-      if (newWindow) {
-        // Set location after opening to avoid popup blockers
-        newWindow.location.href = viewUrl;
-        
-        // Optional: Add a loading message
-        newWindow.document.write(`
-          <html>
-            <head>
-              <title>Loading ${file.originalName}...</title>
-              <style>
-                body { 
-                  font-family: Arial, sans-serif; 
-                  display: flex; 
-                  justify-content: center; 
-                  align-items: center; 
-                  height: 100vh; 
-                  margin: 0;
-                  background: #f5f5f5;
-                }
-                .loading {
-                  text-align: center;
-                  padding: 2rem;
-                  background: white;
-                  border-radius: 8px;
-                  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                }
-              </style>
-            </head>
-            <body>
-              <div class="loading">
-                <h2>Loading PDF...</h2>
-                <p>${file.originalName}</p>
-                <p>If this doesn't load automatically, <a href="${viewUrl}" target="_self">click here</a></p>
-              </div>
-            </body>
-          </html>
-        `);
-        
-        // Redirect after a short delay
-        setTimeout(() => {
-          newWindow.location.replace(viewUrl);
-        }, 1000);
-        
-      } else {
-        // Popup was blocked, try alternative method
-        console.log('Popup blocked, trying alternative method...');
-        
-        // Create a temporary link element
+      if (!newWindow) {
+        // Popup blocked, try alternative method
         const link = document.createElement('a');
         link.href = viewUrl;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        
-        // Add to DOM temporarily
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
-        // If that fails too, show the URL to user
-        setTimeout(() => {
-          if (window.confirm('Unable to open PDF viewer. Would you like to copy the URL to your clipboard?')) {
-            navigator.clipboard.writeText(viewUrl).then(() => {
-              alert('PDF URL copied to clipboard! Paste it in a new tab to view.');
-            }).catch(() => {
-              prompt('Copy this URL to view the PDF:', viewUrl);
-            });
-          }
-        }, 1000);
       }
       
     } catch (err) {
-      console.error('Error viewing file:', err);
-      setError(`Unable to open PDF: ${err.message}`);
-      
-      // Show user the direct URL as fallback
-      const viewUrl = getFileURL('view');
-      if (viewUrl && window.confirm('Error opening PDF viewer. Would you like to copy the direct link?')) {
-        navigator.clipboard.writeText(viewUrl).then(() => {
-          alert('PDF URL copied! Paste it in a new tab to view.');
-        }).catch(() => {
-          prompt('Copy this URL to view the PDF:', viewUrl);
-        });
-      }
+      console.error('❌ Error viewing file:', err);
+      setError(`Erreur lors de la visualisation: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -400,63 +317,27 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       const downloadUrl = getFileURL('download');
       
       if (!downloadUrl) {
-        throw new Error('No download URL available for this file');
+        throw new Error('Aucune URL de téléchargement disponible');
       }
 
-      console.log('Download attempt:', {
+      console.log('⬇️ Downloading file:', {
         originalName: file.originalName,
         downloadUrl
       });
 
-      // FIXED: More reliable download approach for production
-      try {
-        // First method: Direct download link
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = file.originalName || 'document.pdf';
-        link.style.display = 'none';
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-      } catch (directError) {
-        console.warn('Direct download failed, trying fetch method:', directError);
-        
-        // Fallback method: Fetch and create blob
-        const response = await fetch(downloadUrl, {
-          credentials: 'include'
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-        }
-        
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = file.originalName || 'document.pdf';
-        link.style.display = 'none';
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        // Clean up the blob URL
-        setTimeout(() => window.URL.revokeObjectURL(url), 100);
-      }
+      // Create a temporary link for download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = file.originalName || 'document.pdf';
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       
     } catch (err) {
-      console.error('Error downloading file:', err);
-      setError(`Download failed: ${err.message}`);
-      
-      // Fallback: Open download URL in new tab
-      const downloadUrl = getFileURL('download');
-      if (downloadUrl) {
-        window.open(downloadUrl, '_blank');
-      }
+      console.error('❌ Error downloading file:', err);
+      setError(`Erreur lors du téléchargement: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -584,11 +465,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         <div style={sizeStyles}>
           <span>📊</span>
           {formatFileSize(file.fileSize || 0)}
-          {file._id && (
-            <span style={{ marginLeft: 'auto', opacity: 0.7 }}>
-              ID: {file._id.slice(-6)}
-            </span>
-          )}
         </div>
 
         {/* Development debug info */}
@@ -596,7 +472,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           <div style={debugStyles}>
             <div>URL: {debugInfo.viewUrl}</div>
             <div>Method: {debugInfo.method}</div>
-            <div>BaseURL: {API_CONFIG.getBaseURL()}</div>
           </div>
         )}
 
@@ -614,56 +489,33 @@ export const FileCard = ({ file, apiBaseUrl }) => {
             style={viewButtonStyles}
             onClick={handleView}
             disabled={loading}
-            title={`Open ${file.originalName} in browser`}
           >
             <Eye size={isMobile ? 16 : 18} />
-            {loading ? 'Opening...' : 'View PDF'}
+            {loading ? 'Ouverture...' : 'Visualiser'}
           </button>
           
           <button
             style={downloadButtonStyles}
             onClick={handleDownload}
             disabled={loading}
-            title={`Download ${file.originalName}`}
           >
             <Download size={isMobile ? 16 : 18} />
-            {loading ? 'Downloading...' : 'Download'}
+            {loading ? 'Téléchargement...' : 'Télécharger'}
           </button>
         </div>
-
-        {/* Direct URL link for debugging/fallback */}
-        {process.env.NODE_ENV === 'development' && (
-          <div style={{ 
-            marginTop: '0.5rem', 
-            fontSize: '0.625rem', 
-            color: '#6b7280',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.25rem'
-          }}>
-            <ExternalLink size={12} />
-            <a 
-              href={getFileURL('view')} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              style={{ color: '#3b82f6', textDecoration: 'underline' }}
-            >
-              Direct Link
-            </a>
-          </div>
-        )}
       </div>
     </div>
   );
 };
 
-// Enhanced Files Page Component (unchanged for brevity)
+// Enhanced Files Page Component
 export const FilesPage = ({ files = [], loading = false, error = null, onRetry, apiBaseUrl }) => {
   const breakpoint = useBreakpoints();
   const isMobile = ['mobile-small', 'mobile', 'mobile-large'].includes(breakpoint);
   const [apiStatus, setApiStatus] = useState('checking');
 
   useEffect(() => {
+    // Test API connection on mount
     const testAPI = async () => {
       try {
         const isConnected = await API_CONFIG.testConnection();
@@ -772,13 +624,13 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
   const getStatusText = () => {
     switch (apiStatus) {
       case 'connected':
-        return 'API Connected';
+        return '✅ API Connectée';
       case 'disconnected':
-        return 'API Disconnected';
+        return '⚠️ API Déconnectée';
       case 'error':
-        return 'API Error';
+        return '❌ Erreur API';
       default:
-        return 'Testing API...';
+        return '🔄 Test API...';
     }
   };
 
@@ -787,7 +639,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
       <div style={containerStyles}>
         <div style={loadingStyles}>
           <div style={spinnerStyles}></div>
-          <div>Loading files...</div>
+          <div>Chargement des fichiers...</div>
         </div>
         <style jsx>{`
           @keyframes spin {
@@ -803,7 +655,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
     return (
       <div style={containerStyles}>
         <div style={errorStateStyles}>
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚠</div>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚠️</div>
           <div style={{ marginBottom: '1rem', textAlign: 'center', color: '#dc2626' }}>
             {error}
           </div>
@@ -826,7 +678,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
               onMouseOver={(e) => e.target.style.background = '#2563eb'}
               onMouseOut={(e) => e.target.style.background = '#3b82f6'}
             >
-              Retry
+              Réessayer
             </button>
           )}
         </div>
@@ -839,7 +691,7 @@ export const FilesPage = ({ files = [], loading = false, error = null, onRetry, 
       <div style={containerStyles}>
         <div style={emptyStateStyles}>
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
-          <div>No files available</div>
+          <div>Aucun fichier disponible</div>
           <div style={getStatusBadgeStyles()}>
             {getStatusText()}
           </div>
@@ -879,6 +731,7 @@ const ProductionPDFDemo = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Updated sample files based on your actual API response
   const sampleProductionFiles = [
     {
       _id: "689b4903c49b87ce3ab38db3",
@@ -947,13 +800,14 @@ const ProductionPDFDemo = () => {
   // Simulate API loading
   useEffect(() => {
     const timer = setTimeout(() => {
+      // Simulate occasional API errors for testing
       const success = Math.random() > 0.1; // 90% success rate
       
       if (success) {
         setCurrentFiles(sampleProductionFiles);
         setError(null);
       } else {
-        setError('Unable to connect to server. Please check that https://archive-mi73.onrender.com is accessible.');
+        setError('Impossible de se connecter au serveur. Vérifiez que https://archive-mi73.onrender.com est accessible.');
       }
       setLoading(false);
     }, 1500);
@@ -966,6 +820,7 @@ const ProductionPDFDemo = () => {
     setError(null);
     setCurrentFiles([]);
     
+    // Test actual API connection
     try {
       const isConnected = await API_CONFIG.testConnection();
       
@@ -973,13 +828,13 @@ const ProductionPDFDemo = () => {
         if (isConnected) {
           setCurrentFiles(sampleProductionFiles);
         } else {
-          setError('API server is not responding. Please check your internet connection and verify that https://archive-mi73.onrender.com is online.');
+          setError('Le serveur API ne répond pas. Vérifiez votre connexion internet et que le serveur https://archive-mi73.onrender.com est en ligne.');
         }
         setLoading(false);
       }, 1000);
     } catch (err) {
       setTimeout(() => {
-        setError(`Connection error: ${err.message}`);
+        setError(`Erreur de connexion: ${err.message}`);
         setLoading(false);
       }, 1000);
     }
@@ -1006,10 +861,10 @@ const ProductionPDFDemo = () => {
           textAlign: 'center'
         }}>
           <h1 style={{ margin: 0, fontSize: '2rem', marginBottom: '0.5rem' }}>
-            University Archive System
+            📚 Archive Universitaire
           </h1>
           <p style={{ margin: 0, opacity: 0.9, fontSize: '1.1rem' }}>
-            Production-Ready PDF File Management with Fixed Viewing
+            Système de gestion de fichiers avec stockage local - Version Production
           </p>
           <div style={{
             background: 'rgba(255,255,255,0.2)',
