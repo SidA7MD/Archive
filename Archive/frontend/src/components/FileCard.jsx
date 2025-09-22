@@ -13,7 +13,7 @@ const API_CONFIG = {
     }
     
     // For production - try environment variable first, then use your production API URL
-    const envApiUrl = process.env.REACT_APP_API_URL || process.env.VITE_BACKEND_URL;
+    const envApiUrl = import.meta.env?.VITE_BACKEND_URL;
     
     if (envApiUrl) {
       return envApiUrl;
@@ -222,7 +222,8 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         return `${baseUrl}/api/files/${file._id}/view`;
       }
       if (file.filePath) {
-        return file.filePath.startsWith('http') ? file.filePath : `${baseUrl}${file.filePath}`;
+        const prefixed = file.filePath.startsWith('/') ? file.filePath : `/${file.filePath}`;
+        return prefixed.startsWith('http') ? prefixed : `${baseUrl}${prefixed}`;
       }
     } else if (type === 'download') {
       // For downloading files
@@ -240,7 +241,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return null;
   };
 
-  // Enhanced view handler with multiple fallback strategies
+  // Simplified view handler: open directly to avoid CORS preflight issues
   const handleView = async () => {
     try {
       setLoading(true);
@@ -252,45 +253,14 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         throw new Error('Aucune URL de visualisation disponible');
       }
 
-      console.log('🔍 Attempting to view file:', {
-        originalName: file.originalName,
-        fileId: file._id,
-        viewUrl,
-        fileName: file.fileName
-      });
-
       setDebugInfo({
         viewUrl,
         method: 'Direct browser open',
         timestamp: new Date().toISOString()
       });
 
-      // First, try to test if the URL is accessible
-      try {
-        const testResponse = await fetch(viewUrl, {
-          method: 'HEAD',
-          credentials: 'include'
-        });
-        
-        console.log('📋 URL accessibility test:', {
-          url: viewUrl,
-          status: testResponse.status,
-          ok: testResponse.ok,
-          headers: Object.fromEntries(testResponse.headers.entries())
-        });
-        
-        if (!testResponse.ok) {
-          console.warn('⚠️ URL test failed, but will try to open anyway');
-        }
-      } catch (testError) {
-        console.warn('⚠️ URL test failed:', testError.message, 'but will try to open anyway');
-      }
-
-      // Open the PDF in a new tab
       const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
-      
       if (!newWindow) {
-        // Popup blocked, try alternative method
         const link = document.createElement('a');
         link.href = viewUrl;
         link.target = '_blank';
@@ -308,7 +278,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     }
   };
 
-  // Enhanced download handler
+  // Simplified download handler: open download URL directly
   const handleDownload = async () => {
     try {
       setLoading(true);
@@ -320,20 +290,16 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         throw new Error('Aucune URL de téléchargement disponible');
       }
 
-      console.log('⬇️ Downloading file:', {
-        originalName: file.originalName,
-        downloadUrl
-      });
-
-      // Create a temporary link for download
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = file.originalName || 'document.pdf';
-      link.style.display = 'none';
-      
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const newWindow = window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+      if (!newWindow) {
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
       
     } catch (err) {
       console.error('❌ Error downloading file:', err);
