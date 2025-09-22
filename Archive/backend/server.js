@@ -128,7 +128,8 @@ const getBaseURL = (req) => {
 // FIXED: Serve uploaded files with proper headers for PDF viewing
 app.use('/uploads', (req, res, next) => {
   // Set proper headers for PDF files
-  const filePath = path.join(uploadsDir, req.path);
+  const relativePath = req.path.replace(/^\//, '');
+  const filePath = path.join(uploadsDir, relativePath);
   
   if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
     res.setHeader('Content-Type', 'application/pdf');
