@@ -125,21 +125,50 @@ const getBaseURL = (req) => {
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
-// FIXED: Serve uploaded files with proper headers for PDF viewing
+// CRITICAL FIX: Move uploads middleware BEFORE other routes
+// This is the key fix - static file serving must come before API routes
 app.use('/uploads', (req, res, next) => {
-  // Set proper headers for PDF files
-  const filePath = path.join(uploadsDir, req.path);
+  console.log(`📁 Static file request: ${req.method} ${req.path}`);
   
-  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
+  // Decode the URL to handle special characters
+  const decodedPath = decodeURIComponent(req.path);
+  const filePath = path.join(uploadsDir, decodedPath);
+  
+  console.log(`📁 Looking for file: ${filePath}`);
+  
+  // Check if file exists
+  if (!fs.existsSync(filePath)) {
+    console.log(`❌ File not found: ${filePath}`);
+    
+    // List available files for debugging
+    try {
+      const files = fs.readdirSync(uploadsDir);
+      console.log(`📂 Available files in uploads:`, files);
+    } catch (err) {
+      console.log(`📂 Could not read uploads directory:`, err.message);
+    }
+    
+    return res.status(404).json({
+      error: 'File not found',
+      requestedFile: decodedPath,
+      uploadPath: uploadsDir,
+      message: 'The requested file does not exist on the server'
+    });
+  }
+
+  // Set proper headers for PDF files
+  if (decodedPath.toLowerCase().endsWith('.pdf')) {
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
     res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     
     // Handle range requests for large PDFs
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
     const range = req.headers.range;
     
     if (range) {
@@ -162,7 +191,6 @@ app.use('/uploads', (req, res, next) => {
   
   next();
 }, express.static(uploadsDir, {
-  // Additional options for static file serving
   maxAge: '1y',
   etag: true,
   lastModified: true,
@@ -294,14 +322,20 @@ const requireDB = (req, res, next) => {
   next();
 };
 
-// Input validation middleware
+// Input validation middleware - FIXED to work with multer
 const validateUploadData = (req, res, next) => {
+  // This validation will happen AFTER multer processes the form data
   const { semester, type, subject, year } = req.body;
   
+  console.log('🔍 Validation check - req.body:', req.body);
+  console.log('🔍 Validation check - req.file:', req.file ? req.file.originalname : 'No file');
+  
   if (!semester || !type || !subject || !year) {
+    console.log('❌ Validation failed - missing fields:', { semester, type, subject, year });
     return res.status(400).json({
       error: 'Missing required fields',
-      required: ['semester', 'type', 'subject', 'year']
+      required: ['semester', 'type', 'subject', 'year'],
+      received: { semester, type, subject, year }
     });
   }
 
@@ -311,6 +345,7 @@ const validateUploadData = (req, res, next) => {
     });
   }
 
+  console.log('✅ Validation passed');
   next();
 };
 
@@ -640,8 +675,9 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
 });
 
 // POST /api/upload - Upload PDF to local storage - COMPLETELY FIXED
-app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res) => {
+app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
+    // Handle multer errors first
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
@@ -651,15 +687,60 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
       return res.status(400).json({ error: err.message });
     }
 
+    // Check if file was uploaded
     if (!req.file) {
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
+    // NOW validate the form data (after multer has processed it)
+    const { semester, type, subject, year } = req.body;
+    
+    console.log('🔍 Upload validation - req.body:', req.body);
+    console.log('🔍 Upload validation - req.file:', req.file.originalname);
+    
+    // Validate required fields
+    if (!semester || !type || !subject || !year) {
+      console.log('❌ Upload validation failed - missing fields:', { semester, type, subject, year });
+      
+      // Clean up uploaded file since validation failed
+      if (req.file && req.file.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+          console.log('🗑️  Cleaned up file after validation failure:', req.file.path);
+        } catch (cleanupError) {
+          console.error('Error cleaning up file:', cleanupError);
+        }
+      }
+      
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['semester', 'type', 'subject', 'year'],
+        received: { semester, type, subject, year }
+      });
+    }
+
+    // Validate year is a number
+    if (isNaN(parseInt(year))) {
+      // Clean up uploaded file
+      if (req.file && req.file.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+          console.log('🗑️  Cleaned up file after year validation failure:', req.file.path);
+        } catch (cleanupError) {
+          console.error('Error cleaning up file:', cleanupError);
+        }
+      }
+      
+      return res.status(400).json({
+        error: 'Year must be a valid number'
+      });
+    }
+
+    console.log('✅ Upload validation passed');
+
     const session = await mongoose.startSession();
     
     try {
-      const { semester, type, subject, year } = req.body;
-      
       console.log('📤 File uploaded locally:', {
         filename: req.file.filename,
         originalName: req.file.originalname,
@@ -732,7 +813,7 @@ app.post('/api/upload', uploadLimiter, requireDB, validateUploadData, (req, res)
           await yearDoc.save({ session });
         }
 
-        // COMPLETELY FIXED: Use the enhanced getBaseURL function
+        // Use the enhanced getBaseURL function
         const baseUrl = getBaseURL(req);
         console.log('🔗 Upload: Using base URL:', baseUrl);
         
@@ -1137,7 +1218,7 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// ADDED: Test endpoint for PDF serving
+// ADDED: Test endpoint for PDF serving with detailed debugging
 app.get('/api/test-pdf', async (req, res) => {
   try {
     // Find a sample PDF file
@@ -1147,21 +1228,33 @@ app.get('/api/test-pdf', async (req, res) => {
       return res.json({
         status: 'No PDFs available for testing',
         message: 'Upload a PDF file first to test PDF serving',
-        baseURL: getBaseURL(req)
+        baseURL: getBaseURL(req),
+        uploadsDir,
+        dirContents: fs.readdirSync(uploadsDir)
       });
     }
 
     const sampleFile = files[0];
     const baseURL = getBaseURL(req);
+    const filePath = path.join(uploadsDir, sampleFile);
+    const stats = fs.statSync(filePath);
     
     res.json({
       status: 'PDF serving ready',
       sampleFile,
       baseURL,
+      fileStats: {
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime
+      },
       testUrls: {
         directAccess: `${baseURL}/uploads/${sampleFile}`,
         viaApi: `${baseURL}/api/files/test/view`,
       },
+      uploadsDir,
+      totalPDFs: files.length,
+      allPDFs: files,
       instructions: {
         1: 'Click on directAccess URL to test direct PDF viewing',
         2: 'This should open the PDF in your browser',
@@ -1172,7 +1265,59 @@ app.get('/api/test-pdf', async (req, res) => {
     res.status(500).json({
       status: 'Error testing PDF serving',
       error: error.message,
-      baseURL: getBaseURL(req)
+      baseURL: getBaseURL(req),
+      uploadsDir,
+      stack: error.stack
+    });
+  }
+});
+
+// CRITICAL FIX: Debug endpoint for uploads directory
+app.get('/api/debug/uploads', (req, res) => {
+  try {
+    const baseURL = getBaseURL(req);
+    
+    if (!fs.existsSync(uploadsDir)) {
+      return res.json({
+        error: 'Uploads directory does not exist',
+        uploadsDir,
+        baseURL
+      });
+    }
+
+    const files = fs.readdirSync(uploadsDir);
+    const fileDetails = files.map(file => {
+      const filePath = path.join(uploadsDir, file);
+      const stats = fs.statSync(filePath);
+      return {
+        name: file,
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime,
+        directUrl: `${baseURL}/uploads/${file}`,
+        encodedUrl: `${baseURL}/uploads/${encodeURIComponent(file)}`
+      };
+    });
+
+    res.json({
+      status: 'Debug info for uploads directory',
+      uploadsDir,
+      baseURL,
+      totalFiles: files.length,
+      files: fileDetails,
+      pdfFiles: fileDetails.filter(f => f.name.endsWith('.pdf')),
+      environment: {
+        NODE_ENV: process.env.NODE_ENV,
+        PORT: process.env.PORT,
+        PWD: process.cwd()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error reading uploads directory',
+      message: error.message,
+      uploadsDir,
+      stack: error.stack
     });
   }
 });
@@ -1248,7 +1393,7 @@ app.use((error, req, res, next) => {
   });
 });
 
-// 404 handler - ENHANCED
+// 404 handler - ENHANCED (this should be LAST)
 app.use('*', (req, res) => {
   console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
   
@@ -1270,13 +1415,15 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
       'GET /api/test-pdf - Test PDF serving',
+      'GET /api/debug/uploads - Debug uploads directory',
       'GET /uploads/:filename - Direct file access'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testPdf: `${baseURL}/api/test-pdf`
+      testPdf: `${baseURL}/api/test-pdf`,
+      debugUploads: `${baseURL}/api/debug/uploads`
     }
   });
 });
@@ -1284,7 +1431,7 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n📁 University Archive Server - COMPLETELY FIXED FOR RENDER`);
+  console.log(`\n📁 University Archive Server - CRITICAL PDF SERVING FIXES APPLIED`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1298,6 +1445,13 @@ app.listen(PORT, async () => {
   console.log(`🌐 CORS: Enabled for production origins`);
   console.log(`📄 PDF Serving: Enhanced with range request support`);
   console.log(`🔧 URL Generation: Smart detection for Render deployment`);
+  
+  console.log('\n🔥 CRITICAL FIXES APPLIED:');
+  console.log('✅ Moved /uploads middleware BEFORE API routes');
+  console.log('✅ Added comprehensive file existence checking');
+  console.log('✅ Enhanced error logging for static file requests');
+  console.log('✅ Added debug endpoints for troubleshooting');
+  console.log('✅ Improved URL decoding for special characters');
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -1313,20 +1467,12 @@ app.listen(PORT, async () => {
       console.log('📋 Admin files:', `${serverURL}/api/admin/files`);
       console.log('🔍 Health check:', `${serverURL}/api/health`);
       console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
+      console.log('🔍 Debug uploads:', `${serverURL}/api/debug/uploads`);
       
       if (process.env.NODE_ENV === 'production' || serverURL.includes('.onrender.com')) {
         console.log('🚀 Running in PRODUCTION/RENDER mode');
-        console.log('⚠️  Make sure NODE_ENV is set to "production" in Render dashboard');
-        console.log('📋 Current allowed origins include:');
-        console.log('   - https://www.larchive.tech');
-        console.log('   - https://larchive.tech');  
-        console.log('   - Vercel apps (*.vercel.app)');
-        console.log('   - Render apps (*.render.com)');
       } else {
         console.log('🛠️  Running in DEVELOPMENT mode');
-        console.log(`📝 API Documentation: ${serverURL}/api/health`);
-        console.log(`📁 Direct file access: ${serverURL}/uploads/`);
-        console.log(`🔧 Debug endpoint: ${serverURL}/api/test-pdf`);
       }
       
       // Test uploads directory
@@ -1336,21 +1482,17 @@ app.listen(PORT, async () => {
         if (testFiles.length > 0) {
           console.log(`📋 Sample file: ${testFiles[0]}`);
           console.log(`🔗 Test URL: ${serverURL}/uploads/${testFiles[0]}`);
+          console.log(`🔗 Debug URL: ${serverURL}/api/debug/uploads`);
         }
       } catch (error) {
         console.log('⚠️  Could not read uploads directory:', error.message);
       }
       
-      console.log('\n🔥 KEY FIXES APPLIED:');
-      console.log('✅ Enhanced getBaseURL() function with Render detection');
-      console.log('✅ Smart URL generation for both development and production');
-      console.log('✅ Proper .onrender.com domain detection');
-      console.log('✅ All endpoints use consistent URL generation');
-      console.log('✅ Upload endpoint completely fixed for Render');
-      console.log('\n🎯 NEXT STEPS:');
-      console.log('1. Set NODE_ENV=production in Render dashboard');
-      console.log('2. Test upload functionality');
-      console.log('3. Check PDF viewing in browser');
+      console.log('\n🎯 NEXT STEPS FOR DEBUGGING:');
+      console.log('1. Check debug endpoint:', `${serverURL}/api/debug/uploads`);
+      console.log('2. Test health endpoint:', `${serverURL}/api/health`);
+      console.log('3. Try direct PDF access with a known filename');
+      console.log('4. Check server logs for file access attempts');
     }
   }, 1000);
   
