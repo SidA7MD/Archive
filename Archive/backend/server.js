@@ -13,12 +13,31 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Create uploads directory if it doesn't exist
+// CRITICAL FIX: Create uploads directory on startup with proper permissions
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('📁 Created uploads directory');
+  try {
+    fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o755 });
+    console.log('📁 Created uploads directory with permissions:', uploadsDir);
+  } catch (error) {
+    console.error('❌ Failed to create uploads directory:', error);
+    console.log('📁 Attempting to create in /tmp instead...');
+    
+    // Fallback to /tmp directory for Render
+    const tmpUploadsDir = path.join('/tmp', 'uploads');
+    try {
+      fs.mkdirSync(tmpUploadsDir, { recursive: true, mode: 0o755 });
+      console.log('📁 Created uploads directory in /tmp:', tmpUploadsDir);
+      // Update the global uploadsDir variable
+      global.UPLOADS_DIR = tmpUploadsDir;
+    } catch (tmpError) {
+      console.error('❌ Failed to create uploads directory in /tmp:', tmpError);
+    }
+  }
 }
+
+// Use the global uploads directory or fallback
+const finalUploadsDir = global.UPLOADS_DIR || uploadsDir;
 
 // Security middleware - FIXED for PDF serving
 app.use(helmet({
@@ -125,14 +144,14 @@ const getBaseURL = (req) => {
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
-// CRITICAL FIX: Move uploads middleware BEFORE other routes
-// This is the key fix - static file serving must come before API routes
+// CRITICAL FIX: Move uploads middleware BEFORE other routes and use dynamic directory
 app.use('/uploads', (req, res, next) => {
-  console.log(`📁 Static file request: ${req.method} ${req.path}`);
+  const currentUploadsDir = global.UPLOADS_DIR || uploadsDir;
+  console.log(`📁 Static file request: ${req.method} ${req.path} - Using directory: ${currentUploadsDir}`);
   
   // Decode the URL to handle special characters
   const decodedPath = decodeURIComponent(req.path);
-  const filePath = path.join(uploadsDir, decodedPath);
+  const filePath = path.join(currentUploadsDir, decodedPath);
   
   console.log(`📁 Looking for file: ${filePath}`);
   
@@ -142,8 +161,17 @@ app.use('/uploads', (req, res, next) => {
     
     // List available files for debugging
     try {
-      const files = fs.readdirSync(uploadsDir);
+      const files = fs.readdirSync(currentUploadsDir);
       console.log(`📂 Available files in uploads:`, files);
+      
+      // Also check if file exists in alternative locations
+      const altPath1 = path.join(__dirname, 'uploads', decodedPath);
+      const altPath2 = path.join('/tmp/uploads', decodedPath);
+      
+      console.log(`📂 Checking alternative paths:`);
+      console.log(`   - ${altPath1}: ${fs.existsSync(altPath1)}`);
+      console.log(`   - ${altPath2}: ${fs.existsSync(altPath2)}`);
+      
     } catch (err) {
       console.log(`📂 Could not read uploads directory:`, err.message);
     }
@@ -151,8 +179,13 @@ app.use('/uploads', (req, res, next) => {
     return res.status(404).json({
       error: 'File not found',
       requestedFile: decodedPath,
-      uploadPath: uploadsDir,
-      message: 'The requested file does not exist on the server'
+      uploadPath: currentUploadsDir,
+      message: 'The requested file does not exist on the server',
+      debug: {
+        originalPath: req.path,
+        decodedPath,
+        searchedPath: filePath
+      }
     });
   }
 
@@ -165,7 +198,7 @@ app.use('/uploads', (req, res, next) => {
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     
     // Handle range requests for large PDFs
@@ -190,7 +223,7 @@ app.use('/uploads', (req, res, next) => {
   }
   
   next();
-}, express.static(uploadsDir, {
+}, express.static(finalUploadsDir, {
   maxAge: '1y',
   etag: true,
   lastModified: true,
@@ -278,10 +311,24 @@ const Subject = require('./models/Subject');
 const Year = require('./models/Year');
 const File = require('./models/File');
 
-// Configure local file storage for Multer
+// Configure local file storage for Multer - FIXED for Render
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, uploadsDir);
+    const currentUploadsDir = global.UPLOADS_DIR || uploadsDir;
+    
+    // Ensure the directory exists
+    if (!fs.existsSync(currentUploadsDir)) {
+      try {
+        fs.mkdirSync(currentUploadsDir, { recursive: true, mode: 0o755 });
+        console.log('📁 Created uploads directory for multer:', currentUploadsDir);
+      } catch (error) {
+        console.error('❌ Failed to create uploads directory for multer:', error);
+        return cb(error);
+      }
+    }
+    
+    console.log('📤 Multer destination set to:', currentUploadsDir);
+    cb(null, currentUploadsDir);
   },
   filename: function (req, file, cb) {
     const sanitizedName = file.originalname
@@ -289,7 +336,9 @@ const storage = multer.diskStorage({
       .replace('.pdf', '')
       .substring(0, 50);
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `${uniqueSuffix}-${sanitizedName}.pdf`);
+    const fileName = `${uniqueSuffix}-${sanitizedName}.pdf`;
+    console.log('📤 Multer filename generated:', fileName);
+    cb(null, fileName);
   }
 });
 
@@ -1221,28 +1270,47 @@ app.get('/api/health', async (req, res) => {
 // ADDED: Test endpoint for PDF serving with detailed debugging
 app.get('/api/test-pdf', async (req, res) => {
   try {
-    // Find a sample PDF file
-    const files = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+    const currentUploadsDir = global.UPLOADS_DIR || uploadsDir;
+    
+    // Check if uploads directory exists
+    if (!fs.existsSync(currentUploadsDir)) {
+      return res.json({
+        status: 'Uploads directory does not exist',
+        message: 'No uploads directory found',
+        baseURL: getBaseURL(req),
+        searchedPaths: [
+          currentUploadsDir,
+          uploadsDir,
+          path.join('/tmp', 'uploads')
+        ]
+      });
+    }
+
+    // Find PDF files
+    const files = fs.readdirSync(currentUploadsDir).filter(f => f.endsWith('.pdf'));
     
     if (files.length === 0) {
+      const allFiles = fs.readdirSync(currentUploadsDir);
       return res.json({
         status: 'No PDFs available for testing',
         message: 'Upload a PDF file first to test PDF serving',
         baseURL: getBaseURL(req),
-        uploadsDir,
-        dirContents: fs.readdirSync(uploadsDir)
+        uploadsDir: currentUploadsDir,
+        allFiles: allFiles,
+        totalFiles: allFiles.length
       });
     }
 
     const sampleFile = files[0];
     const baseURL = getBaseURL(req);
-    const filePath = path.join(uploadsDir, sampleFile);
+    const filePath = path.join(currentUploadsDir, sampleFile);
     const stats = fs.statSync(filePath);
     
     res.json({
       status: 'PDF serving ready',
       sampleFile,
       baseURL,
+      uploadsDir: currentUploadsDir,
       fileStats: {
         size: stats.size,
         created: stats.birthtime,
@@ -1252,9 +1320,14 @@ app.get('/api/test-pdf', async (req, res) => {
         directAccess: `${baseURL}/uploads/${sampleFile}`,
         viaApi: `${baseURL}/api/files/test/view`,
       },
-      uploadsDir,
       totalPDFs: files.length,
       allPDFs: files,
+      environment: {
+        NODE_ENV: process.env.NODE_ENV,
+        __dirname: __dirname,
+        cwd: process.cwd(),
+        tmpDir: '/tmp'
+      },
       instructions: {
         1: 'Click on directAccess URL to test direct PDF viewing',
         2: 'This should open the PDF in your browser',
@@ -1266,7 +1339,7 @@ app.get('/api/test-pdf', async (req, res) => {
       status: 'Error testing PDF serving',
       error: error.message,
       baseURL: getBaseURL(req),
-      uploadsDir,
+      uploadsDir: global.UPLOADS_DIR || uploadsDir,
       stack: error.stack
     });
   }
@@ -1276,18 +1349,27 @@ app.get('/api/test-pdf', async (req, res) => {
 app.get('/api/debug/uploads', (req, res) => {
   try {
     const baseURL = getBaseURL(req);
+    const currentUploadsDir = global.UPLOADS_DIR || uploadsDir;
     
-    if (!fs.existsSync(uploadsDir)) {
+    if (!fs.existsSync(currentUploadsDir)) {
       return res.json({
         error: 'Uploads directory does not exist',
-        uploadsDir,
-        baseURL
+        uploadsDir: currentUploadsDir,
+        baseURL,
+        alternatives: {
+          original: uploadsDir,
+          tmp: '/tmp/uploads'
+        },
+        existenceCheck: {
+          original: fs.existsSync(uploadsDir),
+          tmp: fs.existsSync('/tmp/uploads')
+        }
       });
     }
 
-    const files = fs.readdirSync(uploadsDir);
+    const files = fs.readdirSync(currentUploadsDir);
     const fileDetails = files.map(file => {
-      const filePath = path.join(uploadsDir, file);
+      const filePath = path.join(currentUploadsDir, file);
       const stats = fs.statSync(filePath);
       return {
         name: file,
@@ -1301,7 +1383,7 @@ app.get('/api/debug/uploads', (req, res) => {
 
     res.json({
       status: 'Debug info for uploads directory',
-      uploadsDir,
+      uploadsDir: currentUploadsDir,
       baseURL,
       totalFiles: files.length,
       files: fileDetails,
@@ -1309,14 +1391,22 @@ app.get('/api/debug/uploads', (req, res) => {
       environment: {
         NODE_ENV: process.env.NODE_ENV,
         PORT: process.env.PORT,
-        PWD: process.cwd()
+        PWD: process.cwd(),
+        __dirname: __dirname,
+        globalUploadsDir: global.UPLOADS_DIR,
+        originalUploadsDir: uploadsDir
+      },
+      directoryPermissions: {
+        readable: fs.constants.R_OK,
+        writable: fs.constants.W_OK,
+        executable: fs.constants.X_OK
       }
     });
   } catch (error) {
     res.status(500).json({
       error: 'Error reading uploads directory',
       message: error.message,
-      uploadsDir,
+      uploadsDir: global.UPLOADS_DIR || uploadsDir,
       stack: error.stack
     });
   }
