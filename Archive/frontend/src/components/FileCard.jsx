@@ -284,7 +284,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     }
   };
 
-  // Enhanced view handler with comprehensive fallback
+  // Enhanced view handler with comprehensive fallback and better error reporting
   const handleView = async () => {
     try {
       setLoading(true);
@@ -292,13 +292,19 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       
       const urls = getFileURLs();
       console.log('Available URLs for viewing:', urls);
+      console.log('File details:', {
+        id: file._id,
+        originalName: file.originalName,
+        fileName: file.fileName,
+        filePath: file.filePath
+      });
 
-      // Priority order for viewing PDFs
+      // Priority order for viewing PDFs - API view endpoint first since direct files are 404ing
       const urlPriority = [
-        urls.direct,        // Direct static file access (should work with your server)
+        urls.apiView,       // API view endpoint (most reliable)
+        urls.direct,        // Direct static file access
         urls.fileDirect,    // File object direct URL
-        urls.fileView,      // File object view URL
-        urls.apiView        // API view endpoint
+        urls.fileView       // File object view URL
       ].filter(Boolean); // Remove undefined/null URLs
 
       if (urlPriority.length === 0) {
@@ -307,22 +313,29 @@ export const FileCard = ({ file, apiBaseUrl }) => {
 
       let successfulUrl = null;
       let lastError = null;
+      let urlTestResults = [];
 
       // Try each URL in priority order
-      for (const url of urlPriority) {
+      for (let i = 0; i < urlPriority.length; i++) {
+        const url = urlPriority[i];
         console.log(`Trying to view file at: ${url}`);
         
         try {
-          // For the direct static file URL, we'll test it first
-          if (url === urls.direct) {
-            const testResult = await testURL(url);
-            if (!testResult) {
-              console.warn(`URL test failed for ${url}, trying next URL`);
-              continue;
+          // Test the URL first
+          const testResult = await testURL(url);
+          urlTestResults.push({ url, ...testResult });
+          
+          if (!testResult.accessible) {
+            console.warn(`URL test failed for ${url} (Status: ${testResult.status || 'unknown'}), trying next URL`);
+            
+            // If this is the last URL and none worked, show detailed error
+            if (i === urlPriority.length - 1) {
+              throw new Error(`Tous les URLs ont échoué. Détails: ${JSON.stringify(urlTestResults, null, 2)}`);
             }
+            continue;
           }
 
-          // Try to open the URL
+          // URL is accessible, try to open it
           const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
           
           if (newWindow) {
@@ -339,17 +352,23 @@ export const FileCard = ({ file, apiBaseUrl }) => {
             link.click();
             document.body.removeChild(link);
             successfulUrl = url;
+            console.log(`Successfully opened PDF via link click at: ${url}`);
             break;
           }
         } catch (err) {
           console.warn(`Failed to open ${url}:`, err.message);
           lastError = err;
+          
+          // If this is the last URL, throw the error
+          if (i === urlPriority.length - 1) {
+            throw new Error(`Impossible d'ouvrir le fichier. Détails des tests d'URL: ${JSON.stringify(urlTestResults, null, 2)}. Dernière erreur: ${err.message}`);
+          }
           continue;
         }
       }
 
       if (!successfulUrl) {
-        throw new Error(`Impossible d'ouvrir le fichier. Dernière erreur: ${lastError?.message || 'URLs non accessibles'}`);
+        throw new Error(`Impossible d'ouvrir le fichier. Résultats des tests: ${JSON.stringify(urlTestResults, null, 2)}`);
       }
       
     } catch (err) {
@@ -585,11 +604,19 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           </div>
         )}
 
-        {/* Error display */}
+        {/* Enhanced error display with Render-specific guidance */}
         {error && (
           <div style={errorStyles}>
             <AlertCircle size={16} />
-            {error}
+            <div>
+              {error}
+              {error.includes('stockage éphémère') && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.8 }}>
+                  💡 Tip: Sur Render, les fichiers uploadés peuvent disparaître après un redémarrage. 
+                  Considérez utiliser un stockage cloud comme AWS S3, Cloudinary, ou Google Drive.
+                </div>
+              )}
+            </div>
           </div>
         )}
 
