@@ -13,12 +13,43 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
+// FIXED: Configure uploads directory for Render.com persistent storage
+const getUploadsDir = () => {
+  // Check for Render.com persistent disk
+  if (process.env.RENDER_PERSISTENT_DIR) {
+    const renderUploadsDir = path.join(process.env.RENDER_PERSISTENT_DIR, 'uploads');
+    console.log('Using Render persistent disk for uploads:', renderUploadsDir);
+    return renderUploadsDir;
+  }
+  
+  // Default uploads directory
+  return path.join(__dirname, 'uploads');
+};
+
+const uploadsDir = getUploadsDir();
+
 // Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('Created uploads directory');
+  console.log('Created uploads directory at:', uploadsDir);
 }
+
+// CRITICAL FIX: Serve uploaded files BEFORE any other middleware
+// This ensures direct file access works without interference
+app.use('/uploads', express.static(uploadsDir, {
+  maxAge: '1d', // Cache for 1 day
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    if (path.toLowerCase().endsWith('.pdf')) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+      res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    }
+  }
+}));
 
 // Security middleware - FIXED for PDF serving
 app.use(helmet({
@@ -124,54 +155,6 @@ const getBaseURL = (req) => {
   // Priority 4: Default to localhost for development
   return `http://localhost:${process.env.PORT || 5000}`;
 };
-
-// FIXED: Serve uploaded files with proper headers for PDF viewing
-app.use('/uploads', (req, res, next) => {
-  // Set proper headers for PDF files
-  const filePath = path.join(uploadsDir, req.path);
-  
-  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-    
-    // Handle range requests for large PDFs
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
-    const range = req.headers.range;
-    
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunksize = (end - start) + 1;
-      
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
-      res.setHeader('Content-Length', chunksize);
-      res.status(206);
-      
-      const stream = fs.createReadStream(filePath, { start, end });
-      stream.pipe(res);
-      return;
-    }
-    
-    res.setHeader('Content-Length', fileSize);
-  }
-  
-  next();
-}, express.static(uploadsDir, {
-  // Additional options for static file serving
-  maxAge: '1y',
-  etag: true,
-  lastModified: true,
-  setHeaders: (res, path) => {
-    if (path.toLowerCase().endsWith('.pdf')) {
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-    }
-  }
-}));
 
 // MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
@@ -294,6 +277,46 @@ const requireDB = (req, res, next) => {
   next();
 };
 
+// NEW: Debug endpoint to help troubleshoot file access
+app.get('/api/debug/uploads', (req, res) => {
+  try {
+    const files = fs.readdirSync(uploadsDir);
+    const fileDetails = files.map(file => {
+      const filePath = path.join(uploadsDir, file);
+      const stats = fs.statSync(filePath);
+      return {
+        name: file,
+        size: stats.size,
+        created: stats.birthtime,
+        path: filePath,
+        url: `${getBaseURL(req)}/uploads/${file}`,
+        exists: fs.existsSync(filePath),
+        absolutePath: path.resolve(filePath)
+      };
+    });
+    
+    res.json({
+      uploadsDir,
+      absoluteUploadsDir: path.resolve(uploadsDir),
+      fileCount: files.length,
+      baseURL: getBaseURL(req),
+      files: fileDetails,
+      environment: {
+        NODE_ENV: process.env.NODE_ENV,
+        RENDER_PERSISTENT_DIR: process.env.RENDER_PERSISTENT_DIR || 'not set',
+        RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL || 'not set'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+      uploadsDir,
+      exists: fs.existsSync(uploadsDir),
+      absoluteUploadsDir: path.resolve(uploadsDir)
+    });
+  }
+});
+
 // Routes
 
 // GET /api/semesters - List all semesters
@@ -396,7 +419,18 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .sort({ uploadedAt: -1 })
       .lean();
       
-    res.json(files);
+    // FIXED: URLs for files with better fallbacks
+    const baseURL = getBaseURL(req);
+    const enhancedFiles = files.map(file => ({
+      ...file,
+      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      directUrl: `${baseURL}/uploads/${file.fileName}`,
+      storageProvider: 'local',
+      fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
+    }));
+      
+    res.json(enhancedFiles);
   } catch (error) {
     console.error('Error fetching files:', error);
     res.status(500).json({ 
@@ -834,7 +868,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    const filePath = path.join(uploadsDir, file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -871,7 +905,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    const filePath = path.join(uploadsDir, file.fileName);
     
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -934,7 +968,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
     }
 
     // Delete physical file
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    const filePath = path.join(uploadsDir, file.fileName);
     let fileDeleted = false;
     
     if (fs.existsSync(filePath)) {
@@ -1144,7 +1178,10 @@ app.get('/api/health', async (req, res) => {
         exists: uploadsExists,
         isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
         writable: uploadsExists ? (fs.constants.W_OK ? 2 : 0) : false,
-        pdfServing: pdfServingTest
+        pdfServing: pdfServingTest,
+        environment: {
+          RENDER_PERSISTENT_DIR: process.env.RENDER_PERSISTENT_DIR || 'not set'
+        }
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1157,7 +1194,8 @@ app.get('/api/health', async (req, res) => {
       apiBase: baseURL,
       uploads: `${baseURL}/uploads/`,
       health: `${baseURL}/api/health`,
-      files: `${baseURL}/api/files`
+      files: `${baseURL}/api/files`,
+      debug: `${baseURL}/api/debug/uploads`
     }
   });
 });
@@ -1172,7 +1210,9 @@ app.get('/api/test-pdf', async (req, res) => {
       return res.json({
         status: 'No PDFs available for testing',
         message: 'Upload a PDF file first to test PDF serving',
-        baseURL: getBaseURL(req)
+        baseURL: getBaseURL(req),
+        uploadsDir,
+        directoryContents: fs.readdirSync(uploadsDir)
       });
     }
 
@@ -1187,6 +1227,11 @@ app.get('/api/test-pdf', async (req, res) => {
         directAccess: `${baseURL}/uploads/${sampleFile}`,
         viaApi: `${baseURL}/api/files/test/view`,
       },
+      fileInfo: {
+        path: path.join(uploadsDir, sampleFile),
+        exists: fs.existsSync(path.join(uploadsDir, sampleFile)),
+        size: fs.statSync(path.join(uploadsDir, sampleFile)).size
+      },
       instructions: {
         1: 'Click on directAccess URL to test direct PDF viewing',
         2: 'This should open the PDF in your browser',
@@ -1197,7 +1242,9 @@ app.get('/api/test-pdf', async (req, res) => {
     res.status(500).json({
       status: 'Error testing PDF serving',
       error: error.message,
-      baseURL: getBaseURL(req)
+      stack: error.stack,
+      baseURL: getBaseURL(req),
+      uploadsDir
     });
   }
 });
@@ -1295,13 +1342,15 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
       'GET /api/test-pdf - Test PDF serving',
+      'GET /api/debug/uploads - Debug file storage',
       'GET /uploads/:filename - Direct file access'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testPdf: `${baseURL}/api/test-pdf`
+      testPdf: `${baseURL}/api/test-pdf`,
+      debugUploads: `${baseURL}/api/debug/uploads`
     }
   });
 });
@@ -1318,11 +1367,12 @@ app.listen(PORT, async () => {
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
   console.log(`Server URL: ${serverURL}`);
-  console.log(`File Storage: Local file system (${uploadsDir})`);
+  console.log(`File Storage: ${process.env.RENDER_PERSISTENT_DIR ? 'Render Persistent Disk' : 'Local file system'} (${uploadsDir})`);
   console.log(`Security: Enhanced Helmet + CORS for PDF viewing`);
   console.log(`CORS: Enabled for production origins`);
   console.log(`PDF Serving: Enhanced with range request support`);
   console.log(`URL Generation: Smart detection for Render deployment`);
+  console.log(`Static File Order: Correct middleware ordering for PDF serving`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -1338,20 +1388,20 @@ app.listen(PORT, async () => {
       console.log('Admin files:', `${serverURL}/api/admin/files`);
       console.log('Health check:', `${serverURL}/api/health`);
       console.log('PDF test:', `${serverURL}/api/test-pdf`);
+      console.log('Debug endpoint:', `${serverURL}/api/debug/uploads`);
       
       if (process.env.NODE_ENV === 'production' || serverURL.includes('.onrender.com')) {
         console.log('Running in PRODUCTION/RENDER mode');
-        console.log('Make sure NODE_ENV is set to "production" in Render dashboard');
-        console.log('Current allowed origins include:');
-        console.log('   - https://www.larchive.tech');
-        console.log('   - https://larchive.tech');  
-        console.log('   - Vercel apps (*.vercel.app)');
-        console.log('   - Render apps (*.render.com)');
+        console.log('Make sure to configure:');
+        console.log('1. Set NODE_ENV=production in Render dashboard');
+        console.log('2. Add a persistent disk in Render dashboard');
+        console.log('3. Set RENDER_PERSISTENT_DIR=/var/data (or your mount path)');
+        console.log('4. Set RENDER_EXTERNAL_URL=https://archive-mi73.onrender.com');
       } else {
         console.log('Running in DEVELOPMENT mode');
         console.log(`API Documentation: ${serverURL}/api/health`);
         console.log(`Direct file access: ${serverURL}/uploads/`);
-        console.log(`Debug endpoint: ${serverURL}/api/test-pdf`);
+        console.log(`Debug endpoint: ${serverURL}/api/debug/uploads`);
       }
       
       // Test uploads directory
@@ -1365,18 +1415,6 @@ app.listen(PORT, async () => {
       } catch (error) {
         console.log('Could not read uploads directory:', error.message);
       }
-      
-      console.log('\nKEY FIXES APPLIED:');
-      console.log('Enhanced getBaseURL() function with Render detection');
-      console.log('Smart URL generation for both development and production');
-      console.log('Proper .onrender.com domain detection');
-      console.log('All endpoints use consistent URL generation');
-      console.log('Upload endpoint completely fixed for Render');
-      console.log('Validation moved AFTER multer processing');
-      console.log('\nNEXT STEPS:');
-      console.log('1. Set NODE_ENV=production in Render dashboard');
-      console.log('2. Test upload functionality');
-      console.log('3. Check PDF viewing in browser');
     }
   }, 1000);
   
