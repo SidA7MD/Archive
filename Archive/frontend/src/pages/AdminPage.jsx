@@ -28,6 +28,22 @@ export const AdminPage = () => {
 
   const ADMIN_PASSWORD = 'admin123';
 
+  // Debug connection on component mount
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        console.log('Testing connection to:', API_BASE_URL);
+        const response = await fetch(`${API_BASE_URL}/api/health`);
+        const data = await response.json();
+        console.log('Backend connection test:', data);
+      } catch (error) {
+        console.error('Backend connection failed:', error);
+        setMessage('Erreur: Impossible de se connecter au serveur backend');
+      }
+    };
+    testConnection();
+  }, []);
+
   // --- Auth ---
   const handleLogin = (e) => {
     e.preventDefault();
@@ -40,6 +56,7 @@ export const AdminPage = () => {
       setPassword('');
     }
   };
+
   const handleLogout = () => {
     setIsAuthenticated(false);
     setPassword('');
@@ -76,6 +93,7 @@ export const AdminPage = () => {
       setLoading(false);
     }
   };
+
   const loadStats = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/admin/stats`);
@@ -92,27 +110,59 @@ export const AdminPage = () => {
       [name]: value
     }));
   };
+
   const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    console.log('File selected:', file);
     setFormData(prev => ({
       ...prev,
-      pdf: e.target.files[0]
+      pdf: file
     }));
   };
 
-  // --- UPLOAD ---
+  // --- UPLOAD --- FIXED
   const handleSubmit = async (e) => {
     e.preventDefault();
-    // Validate all fields
+    
+    // Get the actual file from the file input element as backup
+    const fileInput = document.getElementById('pdf-input');
+    const selectedFile = formData.pdf || fileInput?.files[0];
+    
+    // Debug logging
+    console.log('Form validation check:', {
+      semester: formData.semester,
+      type: formData.type,
+      subject: formData.subject,
+      year: formData.year,
+      formDataPdf: formData.pdf,
+      selectedFile: selectedFile,
+      fileInputValue: fileInput?.value,
+      fileInputFiles: fileInput?.files[0]
+    });
+
+    // FIXED: Validate all fields including the file
     if (
       !formData.semester ||
       !formData.type ||
       !formData.subject.trim() ||
       !formData.year.trim() ||
-      !formData.pdf
+      !selectedFile
     ) {
       setMessage('Veuillez remplir tous les champs et sélectionner un fichier PDF.');
       return;
     }
+
+    // Additional file validation
+    if (selectedFile && selectedFile.type !== 'application/pdf') {
+      setMessage('Veuillez sélectionner un fichier PDF valide.');
+      return;
+    }
+
+    if (selectedFile && selectedFile.size > 50 * 1024 * 1024) { // 50MB
+      setMessage('Le fichier est trop volumineux. Taille maximum: 50MB.');
+      return;
+    }
+
     setUploading(true);
     setMessage('');
 
@@ -121,14 +171,42 @@ export const AdminPage = () => {
     uploadData.append('type', formData.type);
     uploadData.append('subject', formData.subject);
     uploadData.append('year', formData.year);
-    uploadData.append('pdf', formData.pdf);
+    uploadData.append('pdf', selectedFile);
+
+    // Debug FormData contents
+    console.log('Uploading with data:', {
+      semester: formData.semester,
+      type: formData.type,
+      subject: formData.subject,
+      year: formData.year,
+      fileName: selectedFile.name,
+      fileSize: selectedFile.size,
+      fileType: selectedFile.type
+    });
+
+    // Debug FormData entries
+    console.log('FormData entries:');
+    for (let [key, value] of uploadData.entries()) {
+      if (key === 'pdf') {
+        console.log(`${key}:`, value.name, value.size, value.type);
+      } else {
+        console.log(`${key}:`, value);
+      }
+    }
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
         body: uploadData
       });
+
+      console.log('Upload response status:', response.status);
+      console.log('Upload response headers:', Object.fromEntries(response.headers));
+      
       const responseData = await response.json();
+      console.log('Upload response data:', responseData);
+      console.log('Full error details:', JSON.stringify(responseData, null, 2));
+
       if (response.ok) {
         setMessage('Fichier uploadé avec succès!');
         setFormData({
@@ -145,6 +223,7 @@ export const AdminPage = () => {
         setMessage('Erreur lors de l\'upload: ' + (responseData.error || 'Upload failed'));
       }
     } catch (error) {
+      console.error('Upload error:', error);
       setMessage('Erreur lors de l\'upload: ' + error.message);
     } finally {
       setUploading(false);
@@ -162,7 +241,9 @@ export const AdminPage = () => {
       year: file.year?.year || ''
     });
   };
+
   const cancelEditing = () => setEditingFile(null);
+
   const saveEdit = async () => {
     if (!editingFile) return;
     try {
@@ -193,6 +274,7 @@ export const AdminPage = () => {
   // --- DELETE ---
   const confirmDelete = (file) => setDeleteConfirm(file);
   const cancelDelete = () => setDeleteConfirm(null);
+
   const deleteFile = async () => {
     if (!deleteConfirm) return;
     try {
@@ -230,6 +312,7 @@ export const AdminPage = () => {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleLogin(e);
   };
@@ -288,6 +371,7 @@ export const AdminPage = () => {
             Déconnexion
           </button>
         </div>
+
         {/* Tab Navigation */}
         <div className={styles.tabNav}>
           <button
@@ -361,6 +445,11 @@ export const AdminPage = () => {
                 onChange={handleFileChange}
                 required
               />
+              {formData.pdf && (
+                <div className={styles.fileInfo}>
+                  Fichier sélectionné: {formData.pdf.name} ({formatFileSize(formData.pdf.size)})
+                </div>
+              )}
             </div>
             <button type="submit" disabled={uploading} className={styles.submitButton}>
               {uploading ? 'Upload en cours...' : 'Uploader le fichier'}
@@ -550,19 +639,19 @@ export const AdminPage = () => {
               <div className={styles.statsGrid}>
                 <div className={styles.statCard}>
                   <h3>📁 Total Fichiers</h3>
-                  <div className={styles.statNumber}>{stats.totalFiles}</div>
+                  <div className={styles.statNumber}>{stats.overview?.totalFiles || 0}</div>
                 </div>
                 <div className={styles.statCard}>
                   <h3>📚 Semestres</h3>
-                  <div className={styles.statNumber}>{stats.totalSemesters}</div>
+                  <div className={styles.statNumber}>{stats.overview?.totalSemesters || 0}</div>
                 </div>
                 <div className={styles.statCard}>
                   <h3>📖 Matières</h3>
-                  <div className={styles.statNumber}>{stats.totalSubjects}</div>
+                  <div className={styles.statNumber}>{stats.overview?.totalSubjects || 0}</div>
                 </div>
                 <div className={styles.statCard}>
                   <h3>💾 Taille Totale</h3>
-                  <div className={styles.statNumber}>{formatFileSize(stats.totalSize)}</div>
+                  <div className={styles.statNumber}>{stats.overview?.totalSizeFormatted || '0 Bytes'}</div>
                 </div>
                 {stats.filesByType && stats.filesByType.length > 0 && (
                   <div className={styles.statCard + ' ' + styles.fullWidth}>
