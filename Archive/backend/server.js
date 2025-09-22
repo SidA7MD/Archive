@@ -13,11 +13,11 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
+// Create uploads directory if it doesn't exist (supports persistent disk via env)
+const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('📁 Created uploads directory');
+  console.log('📁 Created uploads directory at', uploadsDir);
 }
 
 // Security middleware - FIXED for PDF serving
@@ -128,10 +128,11 @@ const getBaseURL = (req) => {
 // FIXED: Serve uploaded files with proper headers for PDF viewing
 app.use('/uploads', (req, res, next) => {
   // Set proper headers for PDF files
-  const relativePath = req.path.replace(/^\//, '');
+  const decodedPath = decodeURIComponent(req.path || '');
+  const relativePath = decodedPath.replace(/^\//, '');
   const filePath = path.join(uploadsDir, relativePath);
   
-  if (fs.existsSync(filePath) && req.path.toLowerCase().endsWith('.pdf')) {
+  if (fs.existsSync(filePath) && decodedPath.toLowerCase().endsWith('.pdf')) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -919,7 +920,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
     }
 
     // Delete physical file
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    const filePath = path.join(uploadsDir, file.fileName);
     let fileDeleted = false;
     
     if (fs.existsSync(filePath)) {
