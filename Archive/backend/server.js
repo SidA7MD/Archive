@@ -774,6 +774,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
 });
 
 // FIXED PDF VIEW ROUTE - This is the main fix for your issue
+// FIXED VIEW ROUTE - Replace your existing view route with this
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   console.log(`📄 PDF View request for: ${fileId} from ${req.ip}`);
@@ -792,97 +793,112 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    console.log(`✅ Found file in DB: ${file.originalName}, GridFS ID: ${file.gridFSId}`);
+    console.log(`✅ Found file in DB: ${file.originalName}`);
+    console.log(`📁 File path from DB: ${file.filePath || 'NO PATH STORED'}`);
 
-    // Check if GridFS file exists
-    const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (gridFSFiles.length === 0) {
-      console.error('❌ File not found in GridFS:', file.gridFSId);
-      return res.status(404).json({ 
-        error: 'File no longer exists in storage',
-        message: 'This file may have been deleted from storage'
+    // CRITICAL FIX: Check if filePath exists and is valid
+    if (!file.filePath) {
+      console.error('❌ File path is missing from database record');
+      return res.status(500).json({ 
+        error: 'File path missing',
+        message: 'File record exists but path is not stored. Please re-upload this file.'
       });
     }
 
-    const gridFSFile = gridFSFiles[0];
-    console.log(`✅ Found file in GridFS: ${gridFSFile.filename}, size: ${gridFSFile.length}`);
+    // Build the full file path safely
+    let fullFilePath;
+    try {
+      // Use path.resolve instead of path.join for better error handling
+      const path = require('path');
+      fullFilePath = path.resolve(file.filePath);
+      console.log(`📁 Resolved full path: ${fullFilePath}`);
+    } catch (pathError) {
+      console.error('❌ Error building file path:', pathError.message);
+      return res.status(500).json({ 
+        error: 'Invalid file path',
+        message: 'Could not construct valid file path'
+      });
+    }
 
-    // Set comprehensive headers for PDF viewing
+    // Check if file exists on disk
+    const fs = require('fs');
+    if (!fs.existsSync(fullFilePath)) {
+      console.error('❌ File not found on disk:', fullFilePath);
+      return res.status(404).json({ 
+        error: 'File no longer exists',
+        message: 'File has been removed from storage'
+      });
+    }
+
+    // Get file stats
+    const fileStats = fs.statSync(fullFilePath);
+    console.log(`📊 File stats: ${fileStats.size} bytes, modified: ${fileStats.mtime}`);
+
+    // Set headers for PDF viewing
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Disposition, Accept-Ranges, Content-Range');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Disposition, Accept-Ranges');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', gridFSFile.length.toString());
+    res.setHeader('Content-Length', fileStats.size.toString());
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
 
-    // Handle range requests for large PDFs
+    // Handle range requests
     const range = req.headers.range;
     if (range) {
       console.log(`📄 Range request: ${range}`);
       
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
-      const chunksize = (end - start) + 1;
+      const end = parts[1] ? parseInt(parts[1], 10) : fileStats.size - 1;
 
-      // Validate range
-      if (start >= gridFSFile.length || end >= gridFSFile.length || start > end) {
+      if (start >= fileStats.size || end >= fileStats.size || start > end) {
         console.error('❌ Invalid range request');
-        res.status(416).setHeader('Content-Range', `bytes */${gridFSFile.length}`);
+        res.status(416).setHeader('Content-Range', `bytes */${fileStats.size}`);
         return res.end();
       }
 
-      console.log(`📄 Serving range: ${start}-${end}/${gridFSFile.length} (${chunksize} bytes)`);
+      const chunksize = (end - start) + 1;
+      console.log(`📄 Serving range: ${start}-${end}/${fileStats.size} (${chunksize} bytes)`);
 
       res.status(206);
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${gridFSFile.length}`);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileStats.size}`);
       res.setHeader('Content-Length', chunksize.toString());
 
-      // Create range stream from GridFS
-      const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId, {
-        start: start,
-        end: end
-      });
-
-      downloadStream.on('error', (error) => {
-        console.error('❌ GridFS range stream error:', error.message);
+      // Create read stream for range
+      const readStream = fs.createReadStream(fullFilePath, { start, end });
+      
+      readStream.on('error', (error) => {
+        console.error('❌ File read stream error:', error.message);
         if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to stream PDF range' });
+          res.status(500).json({ error: 'Failed to read file' });
         }
       });
 
-      downloadStream.on('end', () => {
-        console.log(`✅ Range stream completed: ${start}-${end}`);
-      });
-
-      downloadStream.pipe(res);
+      readStream.pipe(res);
     } else {
       // Serve full file
       console.log(`📄 Serving full file: ${file.originalName}`);
 
-      const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
+      const readStream = fs.createReadStream(fullFilePath);
       
-      downloadStream.on('error', (error) => {
-        console.error('❌ GridFS stream error:', error.message);
+      readStream.on('error', (error) => {
+        console.error('❌ File read stream error:', error.message);
         if (!res.headersSent) {
-          res.status(500).json({ 
-            error: 'Failed to stream PDF',
-            details: 'File may be corrupted or missing from storage'
-          });
+          res.status(500).json({ error: 'Failed to read file' });
         }
       });
 
-      downloadStream.on('end', () => {
+      readStream.on('end', () => {
         console.log(`✅ File stream completed: ${file.originalName}`);
       });
 
-      downloadStream.pipe(res);
+      readStream.pipe(res);
     }
     
   } catch (error) {
-    console.error('❌ View route error:', error.message);
+    console.error('❌ View route error:', error.message, error.stack);
     if (!res.headersSent) {
       res.status(500).json({ 
         error: 'Failed to load PDF',
@@ -892,7 +908,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   }
 });
 
-// FIXED PDF DOWNLOAD ROUTE
+// FIXED DOWNLOAD ROUTE - Replace your existing download route with this
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   console.log(`⬇️  Download request for: ${fileId} from ${req.ip}`);
@@ -911,47 +927,67 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    console.log(`✅ Found file in DB: ${file.originalName}, GridFS ID: ${file.gridFSId}`);
+    console.log(`✅ Found file in DB: ${file.originalName}`);
 
-    // Check if GridFS file exists
-    const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (gridFSFiles.length === 0) {
-      console.error('❌ File not found in GridFS:', file.gridFSId);
-      return res.status(404).json({ 
-        error: 'File no longer exists in storage',
-        message: 'This file may have been deleted from storage'
+    // CRITICAL FIX: Check if filePath exists
+    if (!file.filePath) {
+      console.error('❌ File path is missing from database record');
+      return res.status(500).json({ 
+        error: 'File path missing',
+        message: 'File record exists but path is not stored'
       });
     }
 
-    const gridFSFile = gridFSFiles[0];
-    console.log(`✅ Found file in GridFS: ${gridFSFile.filename}, size: ${gridFSFile.length}`);
+    // Build the full file path safely
+    let fullFilePath;
+    try {
+      const path = require('path');
+      fullFilePath = path.resolve(file.filePath);
+      console.log(`📁 Resolved full path: ${fullFilePath}`);
+    } catch (pathError) {
+      console.error('❌ Error building file path:', pathError.message);
+      return res.status(500).json({ 
+        error: 'Invalid file path',
+        message: 'Could not construct valid file path'
+      });
+    }
+
+    // Check if file exists on disk
+    const fs = require('fs');
+    if (!fs.existsSync(fullFilePath)) {
+      console.error('❌ File not found on disk:', fullFilePath);
+      return res.status(404).json({ 
+        error: 'File no longer exists',
+        message: 'File has been removed from storage'
+      });
+    }
+
+    const fileStats = fs.statSync(fullFilePath);
 
     // Set headers for download
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition, Content-Type');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', gridFSFile.length.toString());
+    res.setHeader('Content-Length', fileStats.size.toString());
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=31536000');
 
-    console.log(`⬇️  Starting download: ${file.originalName} (${gridFSFile.length} bytes)`);
+    console.log(`⬇️  Starting download: ${file.originalName} (${fileStats.size} bytes)`);
     
-    // Create download stream from GridFS
-    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
+    // Create read stream
+    const readStream = fs.createReadStream(fullFilePath);
     
-    downloadStream.on('error', (error) => {
-      console.error('❌ GridFS download error:', error.message);
+    readStream.on('error', (error) => {
+      console.error('❌ File read stream error:', error.message);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Failed to download file' });
       }
     });
 
-    downloadStream.on('end', () => {
+    readStream.on('end', () => {
       console.log(`✅ Download completed: ${file.originalName}`);
     });
 
-    downloadStream.pipe(res);
+    readStream.pipe(res);
     
   } catch (error) {
     console.error('❌ Download route error:', error.message);
@@ -961,6 +997,72 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
         message: error.message 
       });
     }
+  }
+});
+
+// DEBUG ENDPOINT - Add this to help diagnose the issue
+app.get('/api/debug/file/:fileId', requireDB, async (req, res) => {
+  try {
+    const fileId = req.params.fileId;
+    
+    if (!mongoose.Types.ObjectId.isValid(fileId)) {
+      return res.json({ error: 'Invalid file ID' });
+    }
+
+    const file = await File.findById(fileId).lean();
+    if (!file) {
+      return res.json({ error: 'File not found in database' });
+    }
+
+    const path = require('path');
+    const fs = require('fs');
+    
+    let fileExists = false;
+    let fileStats = null;
+    let fullPath = null;
+    let pathError = null;
+
+    try {
+      if (file.filePath) {
+        fullPath = path.resolve(file.filePath);
+        fileExists = fs.existsSync(fullPath);
+        if (fileExists) {
+          fileStats = fs.statSync(fullPath);
+        }
+      }
+    } catch (error) {
+      pathError = error.message;
+    }
+
+    res.json({
+      fileId,
+      databaseRecord: {
+        originalName: file.originalName,
+        filePath: file.filePath,
+        fileSize: file.fileSize,
+        uploadedAt: file.uploadedAt
+      },
+      fileSystem: {
+        fullPath,
+        exists: fileExists,
+        size: fileStats?.size || null,
+        modified: fileStats?.mtime || null,
+        pathError
+      },
+      diagnosis: {
+        hasFilePath: !!file.filePath,
+        fileExistsOnDisk: fileExists,
+        sizesMatch: fileStats ? (file.fileSize === fileStats.size) : false,
+        issue: !file.filePath ? 'Missing file path in database' : 
+               !fileExists ? 'File not found on disk' :
+               'File should be accessible'
+      }
+    });
+  } catch (error) {
+    res.json({
+      error: 'Debug failed',
+      message: error.message
+    });
   }
 });
 
