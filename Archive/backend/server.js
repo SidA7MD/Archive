@@ -3,9 +3,10 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const GridFSBucket = require('mongodb').GridFSBucket;
+const { Readable } = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -13,14 +14,7 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Create uploads directory if it doesn't exist (supports persistent disk via env)
-const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('📁 Created uploads directory at', uploadsDir);
-}
-
-// Security middleware - FIXED for PDF serving
+// Security middleware - UPDATED for GridFS
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
@@ -28,22 +22,22 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for PDF.js
-      imgSrc: ["'self'", "data:", "https:", "blob:"], // Allow blob URLs for PDFs
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:", "blob:"],
       connectSrc: ["'self'", "https:"],
       fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'self'", "blob:"], // Allow objects for PDF embedding
+      objectSrc: ["'self'", "blob:"],
       mediaSrc: ["'self'", "blob:"],
-      frameSrc: ["'self'", "blob:"], // Allow frames for PDF viewing
-      workerSrc: ["'self'", "blob:"], // Allow workers for PDF.js
-      childSrc: ["'self'", "blob:"], // Allow child contexts for PDF.js
+      frameSrc: ["'self'", "blob:"],
+      workerSrc: ["'self'", "blob:"],
+      childSrc: ["'self'", "blob:"],
     },
   },
 }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
@@ -58,10 +52,9 @@ const uploadLimiter = rateLimit({
   message: 'Too many upload attempts, please try again later.',
 });
 
-// CORS configuration - FIXED
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
     const allowedOrigins = [
@@ -95,49 +88,29 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Range'],
   exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Range', 'Accept-Ranges'],
-  maxAge: 86400 // 24 hours
+  maxAge: 86400
 };
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// FIXED: Enhanced base URL function for proper production support
+// Base URL function
 const getBaseURL = (req) => {
-  // Priority 1: Render's external URL (most reliable)
   if (process.env.RENDER_EXTERNAL_URL) {
     return process.env.RENDER_EXTERNAL_URL;
   }
   
-  // Priority 2: Direct Render host detection
   if (req && req.get('host') && req.get('host').includes('.onrender.com')) {
     return `https://${req.get('host')}`;
   }
   
-  // Priority 3: Any production environment
   if (process.env.NODE_ENV === 'production' && req && req.get('host')) {
-    // Force HTTPS for production
     return `https://${req.get('host')}`;
   }
   
-  // Priority 4: Development
   return `http://localhost:${process.env.PORT || 5000}`;
 };
-// SIMPLIFIED: Serve uploaded files directly with proper PDF headers
-app.use('/uploads', express.static(uploadsDir, {
-  maxAge: '1y',
-  etag: true,
-  lastModified: true,
-  setHeaders: (res, filePath) => {
-    if (filePath.toLowerCase().endsWith('.pdf')) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      res.setHeader('Cache-Control', 'public, max-age=31536000');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-    }
-  }
-}));
 
 // MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
@@ -160,6 +133,7 @@ let isConnecting = false;
 let reconnectTimeout;
 let retryCount = 0;
 const maxRetries = 5;
+let gridFSBucket;
 
 const connectDB = async () => {
   if (isConnecting) return;
@@ -168,6 +142,13 @@ const connectDB = async () => {
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
     console.log('✅ Connected to MongoDB successfully');
+    
+    // Initialize GridFS bucket
+    gridFSBucket = new GridFSBucket(mongoose.connection.db, {
+      bucketName: 'pdfs'
+    });
+    console.log('✅ GridFS bucket initialized');
+    
     retryCount = 0;
     isConnecting = false;
   } catch (error) {
@@ -214,24 +195,27 @@ const Semester = require('./models/Semester');
 const Type = require('./models/Type');
 const Subject = require('./models/Subject');
 const Year = require('./models/Year');
-const File = require('./models/File');
 
-// Configure local file storage for Multer
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    const sanitizedName = file.originalname
-      .replace(/[^a-zA-Z0-9.\-_]/g, '_')
-      .replace('.pdf', '')
-      .substring(0, 50);
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `${uniqueSuffix}-${sanitizedName}.pdf`);
-  }
+// UPDATED File model for GridFS
+const fileSchema = new mongoose.Schema({
+  originalName: { type: String, required: true },
+  gridFSId: { type: mongoose.Schema.Types.ObjectId, required: true }, // GridFS file ID
+  fileSize: { type: Number, required: true },
+  mimeType: { type: String, default: 'application/pdf' },
+  semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true },
+  type: { type: mongoose.Schema.Types.ObjectId, ref: 'Type', required: true },
+  subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
+  year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year', required: true },
+  storageProvider: { type: String, default: 'gridfs' },
+  uploadedAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-// File filter
+const File = mongoose.model('File', fileSchema);
+
+// Configure Multer for memory storage (since we're using GridFS)
+const storage = multer.memoryStorage();
+
 const fileFilter = (req, file, cb) => {
   if (file.mimetype === 'application/pdf') {
     cb(null, true);
@@ -251,7 +235,7 @@ const upload = multer({
 
 // Middleware for database connection check
 const requireDB = (req, res, next) => {
-  if (mongoose.connection.readyState !== 1) {
+  if (mongoose.connection.readyState !== 1 || !gridFSBucket) {
     return res.status(503).json({ 
       error: 'Database temporarily unavailable',
       message: 'Please try again in a moment'
@@ -392,7 +376,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files - List files with pagination and filtering - FIXED URL generation
+// GET /api/files - List files with pagination and filtering - UPDATED for GridFS
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -419,16 +403,13 @@ app.get('/api/files', requireDB, async (req, res) => {
       File.countDocuments(filter)
     ]);
 
-    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
-    console.log('🔗 Using base URL:', baseURL);
 
     const enhancedFiles = files.map(file => ({
       ...file,
-      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      directUrl: `${baseURL}/uploads/${file.fileName}`, // Direct access to file
-      storageProvider: 'local',
+      storageProvider: 'gridfs',
       fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
     }));
 
@@ -443,7 +424,7 @@ app.get('/api/files', requireDB, async (req, res) => {
         hasPrev: page > 1
       },
       total,
-      baseURL // Include base URL in response for debugging
+      baseURL
     });
   } catch (error) {
     console.error('Error fetching files:', error);
@@ -454,7 +435,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/files - List all files for admin
+// GET /api/admin/files - List all files for admin - UPDATED for GridFS
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
     console.log('📁 Admin: Fetching all files...');
@@ -466,15 +447,13 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
 
     console.log(`📁 Admin: Found ${files.length} files`);
 
-    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
 
     const enhancedFiles = files.map(file => ({
       ...file,
-      viewUrl: `${baseURL}/uploads/${file.fileName}`,
+      viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      directUrl: `${baseURL}/uploads/${file.fileName}`,
-      storageProvider: 'local',
+      storageProvider: 'gridfs',
       fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf'
     }));
 
@@ -488,7 +467,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
   }
 });
 
-// PUT /api/files/:fileId - Update file metadata
+// PUT /api/files/:fileId - Update file metadata - UPDATED for GridFS
 app.put('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     const { fileId } = req.params;
@@ -605,7 +584,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload PDF to local storage - COMPLETELY FIXED
+// POST /api/upload - Upload PDF to GridFS - COMPLETELY REWRITTEN
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -621,7 +600,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
-    // Validate required fields after multer processed the form
+    // Validate required fields
     const { semester, type, subject, year } = req.body || {};
     if (!semester || !type || !subject || !year) {
       return res.status(400).json({
@@ -633,16 +612,43 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     const session = await mongoose.startSession();
     
     try {
-      const { semester, type, subject, year } = req.body;
-      
-      console.log('📤 File uploaded locally:', {
-        filename: req.file.filename,
+      console.log('📤 Uploading file to GridFS:', {
         originalName: req.file.originalname,
         size: req.file.size,
-        path: req.file.path
+        mimeType: req.file.mimetype
       });
 
+      let gridFSFileId;
+
       await session.withTransaction(async () => {
+        // Upload file to GridFS
+        const uploadStream = gridFSBucket.openUploadStream(req.file.originalname, {
+          metadata: {
+            originalName: req.file.originalname,
+            uploadedAt: new Date(),
+            semester,
+            type,
+            subject,
+            year
+          }
+        });
+
+        // Convert buffer to readable stream and pipe to GridFS
+        const readableStream = new Readable();
+        readableStream.push(req.file.buffer);
+        readableStream.push(null);
+
+        await new Promise((resolve, reject) => {
+          readableStream.pipe(uploadStream);
+          
+          uploadStream.on('error', reject);
+          uploadStream.on('finish', () => {
+            gridFSFileId = uploadStream.id;
+            console.log('✅ File uploaded to GridFS with ID:', gridFSFileId);
+            resolve();
+          });
+        });
+
         // Find or create semester
         let semesterDoc = await Semester.findOne({ name: semester }).session(session);
         if (!semesterDoc) {
@@ -707,21 +713,17 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           await yearDoc.save({ session });
         }
 
-        // COMPLETELY FIXED: Use the enhanced getBaseURL function
-        const baseUrl = getBaseURL(req);
-        console.log('🔗 Upload: Using base URL:', baseUrl);
-        
+        // Create file document
         const fileDoc = new File({
           originalName: req.file.originalname,
-          fileName: req.file.filename,
-          filePath: `/uploads/${req.file.filename}`,
+          gridFSId: gridFSFileId,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'local',
+          storageProvider: 'gridfs',
           uploadedAt: new Date()
         });
 
@@ -730,35 +732,35 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         // Populate the saved document for response
         await fileDoc.populate(['semester', 'type', 'subject', 'year']);
 
+        const baseUrl = getBaseURL(req);
+        
         const responseFile = {
           ...fileDoc.toObject(),
-          viewUrl: `${baseUrl}/uploads/${req.file.filename}`,
+          viewUrl: `${baseUrl}/api/files/${fileDoc._id}/view`,
           downloadUrl: `${baseUrl}/api/files/${fileDoc._id}/download`,
-          directUrl: `${baseUrl}/uploads/${req.file.filename}`,
           fileType: req.file.originalname.split('.').pop()?.toLowerCase() || 'pdf'
         };
 
         console.log('✅ Upload successful. File URLs:', {
           viewUrl: responseFile.viewUrl,
-          downloadUrl: responseFile.downloadUrl,
-          directUrl: responseFile.directUrl
+          downloadUrl: responseFile.downloadUrl
         });
 
         res.status(201).json({ 
-          message: 'File uploaded successfully',
+          message: 'File uploaded successfully to GridFS',
           file: responseFile
         });
       });
     } catch (error) {
-      console.error('Error uploading file:', error);
+      console.error('❌ Error uploading file:', error);
       
-      // Clean up local file on error
-      if (req.file && req.file.path) {
+      // Clean up GridFS file on error if it was uploaded
+      if (gridFSFileId) {
         try {
-          fs.unlinkSync(req.file.path);
-          console.log('🗑️  Cleaned up local file:', req.file.path);
+          await gridFSBucket.delete(gridFSFileId);
+          console.log('🗑️  Cleaned up GridFS file:', gridFSFileId);
         } catch (cleanupError) {
-          console.error('Error cleaning up local file:', cleanupError);
+          console.error('Error cleaning up GridFS file:', cleanupError);
         }
       }
       
@@ -772,7 +774,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   });
 });
 
-// GET /api/files/:fileId/download - Download file
+// GET /api/files/:fileId/download - Download file from GridFS
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -784,22 +786,34 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
+    // Check if file exists in GridFS
+    const files = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
+    if (files.length === 0) {
       return res.status(404).json({ 
-        error: 'File no longer exists',
+        error: 'File no longer exists in storage',
         message: 'This file may have been deleted'
       });
     }
 
+    const gridFSFile = files[0];
+
     // Set proper download headers
     res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', gridFSFile.length);
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     
-    res.sendFile(filePath);
+    // Create download stream from GridFS
+    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
+    
+    downloadStream.on('error', (error) => {
+      console.error('GridFS download error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download file' });
+      }
+    });
+
+    downloadStream.pipe(res);
   } catch (error) {
     console.error('Error downloading file:', error);
     res.status(500).json({ 
@@ -809,7 +823,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - View file
+// GET /api/files/:fileId/view - View file from GridFS
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -821,22 +835,20 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(__dirname, 'uploads', file.fileName);
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
+    // Check if file exists in GridFS
+    const files = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
+    if (files.length === 0) {
       return res.status(404).json({ 
-        error: 'File no longer exists',
+        error: 'File no longer exists in storage',
         message: 'This file may have been deleted'
       });
     }
 
-    // FIXED: Set proper headers for PDF viewing in browser
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
-    
+    const gridFSFile = files[0];
+
+    // Set proper headers for PDF viewing in browser
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', fileSize);
+    res.setHeader('Content-Length', gridFSFile.length);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
@@ -848,20 +860,41 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
     if (range) {
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
       const chunksize = (end - start) + 1;
       
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${gridFSFile.length}`);
       res.setHeader('Content-Length', chunksize);
       res.status(206);
       
-      const stream = fs.createReadStream(filePath, { start, end });
-      stream.pipe(res);
+      // Create range stream from GridFS
+      const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId, {
+        start: start,
+        end: end
+      });
+      
+      downloadStream.on('error', (error) => {
+        console.error('GridFS view range error:', error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to view file' });
+        }
+      });
+
+      downloadStream.pipe(res);
       return;
     }
     
-    // Send the entire file
-    res.sendFile(filePath);
+    // Create view stream from GridFS
+    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
+    
+    downloadStream.on('error', (error) => {
+      console.error('GridFS view error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to view file' });
+      }
+    });
+
+    downloadStream.pipe(res);
   } catch (error) {
     console.error('Error viewing file:', error);
     res.status(500).json({ 
@@ -871,7 +904,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   }
 });
 
-// DELETE /api/files/:fileId - Delete file
+// DELETE /api/files/:fileId - Delete file from GridFS
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -883,18 +916,15 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete physical file
-    const filePath = path.join(uploadsDir, file.fileName);
-    let fileDeleted = false;
+    // Delete from GridFS
+    let gridFSDeleted = false;
     
-    if (fs.existsSync(filePath)) {
-      try {
-        fs.unlinkSync(filePath);
-        fileDeleted = true;
-        console.log('🗑️  Deleted local file:', filePath);
-      } catch (error) {
-        console.warn('Warning: Could not delete physical file:', error.message);
-      }
+    try {
+      await gridFSBucket.delete(file.gridFSId);
+      gridFSDeleted = true;
+      console.log('🗑️  Deleted GridFS file:', file.gridFSId);
+    } catch (error) {
+      console.warn('Warning: Could not delete GridFS file:', error.message);
     }
 
     // Delete from database
@@ -902,7 +932,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
 
     res.json({ 
       message: 'File deleted successfully',
-      fileDeleted,
+      gridFSDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -914,7 +944,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Statistics endpoint - FIXED URL generation
+// GET /api/admin/stats - Statistics endpoint - UPDATED for GridFS
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -924,7 +954,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       totalSizeResult,
       filesByType,
       filesBySemester,
-      recentUploads
+      recentUploads,
+      gridFSStats
     ] = await Promise.all([
       File.countDocuments(),
       Semester.countDocuments(),
@@ -974,7 +1005,9 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         .populate(['semester', 'type', 'subject'])
         .sort({ uploadedAt: -1 })
         .limit(10)
-        .lean()
+        .lean(),
+      // Get GridFS collection stats
+      mongoose.connection.db.collection('pdfs.files').stats().catch(() => ({ count: 0, size: 0 }))
     ]);
 
     // Format file sizes
@@ -986,7 +1019,6 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    // FIXED: Use the enhanced getBaseURL function
     const baseURL = getBaseURL(req);
 
     res.json({
@@ -995,7 +1027,10 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         totalSemesters,
         totalSubjects,
         totalSize: totalSizeResult[0]?.totalSize || 0,
-        totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0)
+        totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0),
+        gridFSFiles: gridFSStats.count || 0,
+        gridFSSize: gridFSStats.size || 0,
+        gridFSSizeFormatted: formatFileSize(gridFSStats.size || 0)
       },
       filesByType: filesByType.map(item => ({
         ...item,
@@ -1007,15 +1042,14 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: `${baseURL}/uploads/${file.fileName}`,
+        viewUrl: `${baseURL}/api/files/${file._id}/view`,
         downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        directUrl: `${baseURL}/uploads/${file.fileName}`,
         fileType: file.originalName?.split('.').pop()?.toLowerCase() || 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageProvider: 'Local File System',
-      storageLocation: uploadsDir,
-      baseURL // Include for debugging
+      storageProvider: 'GridFS (MongoDB)',
+      storageLocation: 'MongoDB GridFS Collection: pdfs',
+      baseURL
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);
@@ -1026,7 +1060,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint - ENHANCED with PDF serving test
+// Health check endpoint - UPDATED for GridFS
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1036,43 +1070,27 @@ app.get('/api/health', async (req, res) => {
     3: 'Disconnecting'
   };
 
-  // Check uploads directory
-  const uploadsExists = fs.existsSync(uploadsDir);
-  const uploadsDirStats = uploadsExists ? fs.statSync(uploadsDir) : null;
-
-  // Check file count
-  let fileCount = 0;
+  // Check GridFS bucket
+  let gridFSStatus = 'Not initialized';
+  let gridFSFileCount = 0;
   let dbError = null;
   
-  if (dbStatus === 1) {
+  if (dbStatus === 1 && gridFSBucket) {
     try {
-      fileCount = await File.countDocuments();
+      gridFSStatus = 'Ready';
+      const fileCount = await File.countDocuments();
+      gridFSFileCount = fileCount;
+      
+      // Test GridFS connectivity
+      const gridFSFiles = await gridFSBucket.find().limit(1).toArray();
+      gridFSStatus = `Ready - ${gridFSFiles.length > 0 ? 'Files available' : 'No files yet'}`;
     } catch (error) {
       dbError = error.message;
+      gridFSStatus = 'Error: ' + error.message;
     }
   }
 
-  // FIXED: Test PDF serving capability
-  let pdfServingTest = 'Not tested';
-  try {
-    if (uploadsExists) {
-      const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
-      if (testFiles.length > 0) {
-        const testFile = testFiles[0];
-        const testFilePath = path.join(uploadsDir, testFile);
-        const stats = fs.statSync(testFilePath);
-        pdfServingTest = `Ready - ${testFiles.length} PDF(s) available, sample: ${testFile} (${stats.size} bytes)`;
-      } else {
-        pdfServingTest = 'No PDF files to serve';
-      }
-    }
-  } catch (error) {
-    pdfServingTest = `Error: ${error.message}`;
-  }
-
-  const overallStatus = (dbStatus === 1 && uploadsExists) ? 'OK' : 'Warning';
-
-  // FIXED: Use the enhanced getBaseURL function
+  const overallStatus = (dbStatus === 1 && gridFSBucket) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
@@ -1085,16 +1103,15 @@ app.get('/api/health', async (req, res) => {
         status: dbStatusMap[dbStatus] || 'Unknown',
         host: process.env.MONGO_HOST,
         name: process.env.MONGO_DB_NAME,
-        fileCount: dbStatus === 1 ? fileCount : null,
+        fileCount: dbStatus === 1 ? gridFSFileCount : null,
         ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'Local File System',
-        uploadsDir,
-        exists: uploadsExists,
-        isDirectory: uploadsDirStats ? uploadsDirStats.isDirectory() : false,
-        writable: uploadsExists ? (fs.constants.W_OK ? 2 : 0) : false,
-        pdfServing: pdfServingTest
+        provider: 'GridFS (MongoDB)',
+        bucket: 'pdfs',
+        status: gridFSStatus,
+        ready: !!gridFSBucket,
+        fileCount: gridFSFileCount
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1102,52 +1119,59 @@ app.get('/api/health', async (req, res) => {
     uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
     version: process.env.npm_package_version || '1.0.0',
     nodeVersion: process.version,
-    // Add useful debugging info
     urls: {
       apiBase: baseURL,
-      uploads: `${baseURL}/uploads/`,
       health: `${baseURL}/api/health`,
-      files: `${baseURL}/api/files`
+      files: `${baseURL}/api/files`,
+      upload: `${baseURL}/api/upload`
     }
   });
 });
 
-// ADDED: Test endpoint for PDF serving
-app.get('/api/test-pdf', async (req, res) => {
+// ADDED: Test endpoint for GridFS
+app.get('/api/test-gridfs', requireDB, async (req, res) => {
   try {
-    // Find a sample PDF file
-    const files = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
+    // Get sample files from GridFS
+    const files = await File.find().limit(5).lean();
     
     if (files.length === 0) {
       return res.json({
         status: 'No PDFs available for testing',
-        message: 'Upload a PDF file first to test PDF serving',
-        baseURL: getBaseURL(req)
+        message: 'Upload a PDF file first to test GridFS serving',
+        baseURL: getBaseURL(req),
+        gridFSBucket: !!gridFSBucket
       });
     }
 
-    const sampleFile = files[0];
     const baseURL = getBaseURL(req);
     
     res.json({
-      status: 'PDF serving ready',
-      sampleFile,
+      status: 'GridFS serving ready',
+      fileCount: files.length,
       baseURL,
-      testUrls: {
-        directAccess: `${baseURL}/uploads/${sampleFile}`,
-        viaApi: `${baseURL}/api/files/test/view`,
-      },
+      gridFSBucket: !!gridFSBucket,
+      sampleFiles: files.slice(0, 3).map(file => ({
+        id: file._id,
+        name: file.originalName,
+        size: file.fileSize,
+        testUrls: {
+          view: `${baseURL}/api/files/${file._id}/view`,
+          download: `${baseURL}/api/files/${file._id}/download`,
+        }
+      })),
       instructions: {
-        1: 'Click on directAccess URL to test direct PDF viewing',
-        2: 'This should open the PDF in your browser',
-        3: 'If it downloads instead of viewing, check browser settings'
+        1: 'Click on view URL to test PDF viewing in browser',
+        2: 'Click on download URL to test PDF download',
+        3: 'Files are now served directly from MongoDB GridFS',
+        4: 'This works in both development and production environments'
       }
     });
   } catch (error) {
     res.status(500).json({
-      status: 'Error testing PDF serving',
+      status: 'Error testing GridFS serving',
       error: error.message,
-      baseURL: getBaseURL(req)
+      baseURL: getBaseURL(req),
+      gridFSBucket: !!gridFSBucket
     });
   }
 });
@@ -1223,7 +1247,7 @@ app.use((error, req, res, next) => {
   });
 });
 
-// 404 handler - ENHANCED
+// 404 handler
 app.use('*', (req, res) => {
   console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
   
@@ -1244,14 +1268,14 @@ app.use('*', (req, res) => {
       'POST /api/upload - Upload new file',
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
-      'GET /api/test-pdf - Test PDF serving',
-      'GET /uploads/:filename - Direct file access'
+      'GET /api/test-gridfs - Test GridFS serving',
+      'DELETE /api/files/:id - Delete file'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testPdf: `${baseURL}/api/test-pdf`
+      testGridFS: `${baseURL}/api/test-gridfs`
     }
   });
 });
@@ -1259,82 +1283,64 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n📁 University Archive Server - COMPLETELY FIXED FOR RENDER`);
+  console.log(`\n📁 University Archive Server - GRIDFS IMPLEMENTATION`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
-  // Enhanced URL detection for Render
   const serverURL = process.env.RENDER_EXTERNAL_URL || 
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
   console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`💾 File Storage: Local file system (${uploadsDir})`);
+  console.log(`💾 File Storage: GridFS (MongoDB)`);
   console.log(`🛡️  Security: Enhanced Helmet + CORS for PDF viewing`);
   console.log(`🌐 CORS: Enabled for production origins`);
-  console.log(`📄 PDF Serving: Enhanced with range request support`);
-  console.log(`🔧 URL Generation: Smart detection for Render deployment`);
+  console.log(`📄 PDF Serving: Direct from MongoDB GridFS with range support`);
+  console.log(`🚀 Deployment Ready: Works in all environments`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
-    if (mongoose.connection.readyState === 1) {
+    if (mongoose.connection.readyState === 1 && gridFSBucket) {
       clearInterval(waitForDB);
       
       console.log('🔧 Initializing application...');
       await initializeSemesters();
       
       console.log('🎯 Server ready to accept connections');
-      console.log('📤 Files accessible at:', `${serverURL}/uploads/`);
+      console.log('📤 File uploads: Direct to MongoDB GridFS');
       console.log('📊 Admin panel:', `${serverURL}/api/admin/stats`);
       console.log('📋 Admin files:', `${serverURL}/api/admin/files`);
       console.log('🔍 Health check:', `${serverURL}/api/health`);
-      console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
+      console.log('🧪 GridFS test:', `${serverURL}/api/test-gridfs`);
       
-      if (process.env.NODE_ENV === 'production' || serverURL.includes('.onrender.com')) {
-        console.log('🚀 Running in PRODUCTION/RENDER mode');
-        console.log('⚠️  Make sure NODE_ENV is set to "production" in Render dashboard');
-        console.log('📋 Current allowed origins include:');
-        console.log('   - https://www.larchive.tech');
-        console.log('   - https://larchive.tech');  
-        console.log('   - Vercel apps (*.vercel.app)');
-        console.log('   - Render apps (*.render.com)');
-      } else {
-        console.log('🛠️  Running in DEVELOPMENT mode');
-        console.log(`📝 API Documentation: ${serverURL}/api/health`);
-        console.log(`📁 Direct file access: ${serverURL}/uploads/`);
-        console.log(`🔧 Debug endpoint: ${serverURL}/api/test-pdf`);
-      }
+      console.log('\n🔥 GRIDFS IMPLEMENTATION FEATURES:');
+      console.log('✅ Files stored directly in MongoDB');
+      console.log('✅ Works in all deployment environments');
+      console.log('✅ No local file system dependencies');
+      console.log('✅ Range request support for large PDFs');
+      console.log('✅ Automatic cleanup on upload errors');
+      console.log('✅ Full CRUD operations on files');
+      console.log('✅ Memory-efficient streaming');
       
-      // Test uploads directory
+      console.log('\n🎯 DEPLOYMENT BENEFITS:');
+      console.log('• No file system permissions issues');
+      console.log('• Files persist across deployments');
+      console.log('• Scalable storage solution');
+      console.log('• Built-in redundancy with MongoDB replica sets');
+      
       try {
-        const testFiles = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.pdf'));
-        console.log(`📄 Found ${testFiles.length} PDF file(s) in uploads directory`);
-        if (testFiles.length > 0) {
-          console.log(`📋 Sample file: ${testFiles[0]}`);
-          console.log(`🔗 Test URL: ${serverURL}/uploads/${testFiles[0]}`);
-        }
+        const fileCount = await File.countDocuments();
+        console.log(`📄 Current files in database: ${fileCount}`);
       } catch (error) {
-        console.log('⚠️  Could not read uploads directory:', error.message);
+        console.log('⚠️  Could not count files:', error.message);
       }
-      
-      console.log('\n🔥 KEY FIXES APPLIED:');
-      console.log('✅ Enhanced getBaseURL() function with Render detection');
-      console.log('✅ Smart URL generation for both development and production');
-      console.log('✅ Proper .onrender.com domain detection');
-      console.log('✅ All endpoints use consistent URL generation');
-      console.log('✅ Upload endpoint completely fixed for Render');
-      console.log('\n🎯 NEXT STEPS:');
-      console.log('1. Set NODE_ENV=production in Render dashboard');
-      console.log('2. Test upload functionality');
-      console.log('3. Check PDF viewing in browser');
     }
   }, 1000);
   
-  // Timeout after 30 seconds
   setTimeout(() => {
     clearInterval(waitForDB);
-    if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️  Started without database connection - some features may be limited');
-      console.log('📄 PDF serving should still work for existing files');
+    if (mongoose.connection.readyState !== 1 || !gridFSBucket) {
+      console.log('⚠️  Started without complete database/GridFS initialization');
+      console.log('📄 Some features may be limited until connection is established');
     }
   }, 30000);
 });
