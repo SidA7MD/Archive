@@ -275,6 +275,31 @@ const validateUploadData = (req, res, next) => {
   next();
 };
 
+// Enhanced CORS middleware specifically for file serving routes
+app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
+  // Set CORS headers for all file serving requests
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type, Content-Disposition');
+  
+  // Log the request for debugging
+  console.log(`🌐 CORS headers set for: ${req.method} ${req.originalUrl} from ${req.get('origin') || 'direct'}`);
+  
+  next();
+});
+
+// Enhanced OPTIONS handler for CORS preflight (crucial for deployment)
+app.options('/api/files/:fileId/:action', (req, res) => {
+  console.log(`🔧 CORS preflight for: ${req.params.action} file ${req.params.fileId}`);
+  
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  res.status(200).end();
+});
+
 // Routes
 
 // GET /api/semesters - List all semesters
@@ -785,71 +810,26 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   });
 });
 
-// GET /api/files/:fileId/download - Download file from GridFS
-app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
-      return res.status(400).json({ error: 'Invalid file ID' });
-    }
-
-    const file = await File.findById(req.params.fileId).lean();
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    // Check if file exists in GridFS
-    const files = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (files.length === 0) {
-      return res.status(404).json({ 
-        error: 'File no longer exists in storage',
-        message: 'This file may have been deleted'
-      });
-    }
-
-    const gridFSFile = files[0];
-
-    // Set proper download headers
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', gridFSFile.length);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=31536000');
-    
-    // Create download stream from GridFS
-    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
-    
-    downloadStream.on('error', (error) => {
-      console.error('GridFS download error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to download file' });
-      }
-    });
-
-    downloadStream.pipe(res);
-  } catch (error) {
-    console.error('Error downloading file:', error);
-    res.status(500).json({ 
-      error: 'Failed to download file',
-      message: error.message 
-    });
-  }
-});
-
-// GET /api/files/:fileId/view - View file from GridFS - FIXED for PDF viewing
+// GET /api/files/:fileId/view - FIXED for deployment PDF viewing
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
+  console.log(`📄 View request for file: ${req.params.fileId} from ${req.ip}`);
+  
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
+      console.warn(`❌ Invalid file ID: ${req.params.fileId}`);
       return res.status(400).json({ error: 'Invalid file ID' });
     }
 
     const file = await File.findById(req.params.fileId).lean();
     if (!file) {
+      console.warn(`❌ File not found: ${req.params.fileId}`);
       return res.status(404).json({ error: 'File not found' });
     }
 
     // Check if file exists in GridFS
     const files = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
     if (files.length === 0) {
+      console.error(`❌ GridFS file not found: ${file.gridFSId}`);
       return res.status(404).json({ 
         error: 'File no longer exists in storage',
         message: 'This file may have been deleted'
@@ -857,27 +837,54 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
     }
 
     const gridFSFile = files[0];
+    console.log(`✅ Found GridFS file: ${gridFSFile.filename}, size: ${gridFSFile.length}`);
 
-    // FIXED: Set proper headers for PDF viewing in browser
+    // ENHANCED CORS headers for PDF viewing - Critical for deployment
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type');
+    
+    // Critical PDF headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', gridFSFile.length);
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins for PDF viewing
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year cache
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     
-    // Handle range requests for large PDFs
+    // Enhanced caching and security headers
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // 1 year cache
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    
+    // Add ETag for better caching
+    const etag = `"${file.gridFSId.toString()}-${gridFSFile.length}"`;
+    res.setHeader('ETag', etag);
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      return res.status(304).end();
+    }
+
+    // Handle range requests (crucial for large PDFs and mobile browsers)
     const range = req.headers.range;
     if (range) {
+      console.log(`📊 Range request: ${range}`);
+      
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
+      let end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
       
-      if (start >= gridFSFile.length || end >= gridFSFile.length) {
+      // Validate range
+      if (start >= gridFSFile.length || end >= gridFSFile.length || start > end) {
+        console.warn(`❌ Invalid range: ${start}-${end} for file size ${gridFSFile.length}`);
         res.setHeader('Content-Range', `bytes */${gridFSFile.length}`);
-        return res.status(416).end();
+        return res.status(416).json({ error: 'Range not satisfiable' });
+      }
+
+      // Limit chunk size to prevent memory issues (important for deployment)
+      const maxChunkSize = 1024 * 1024; // 1MB chunks
+      if (end - start + 1 > maxChunkSize) {
+        end = start + maxChunkSize - 1;
       }
 
       const chunksize = (end - start) + 1;
@@ -886,37 +893,112 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       res.setHeader('Content-Length', chunksize);
       res.status(206);
       
+      console.log(`📊 Serving range: ${start}-${end} (${chunksize} bytes)`);
+      
       const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId, {
         start: start,
         end: end
       });
       
       downloadStream.on('error', (error) => {
-        console.error('GridFS view range error:', error);
+        console.error('❌ GridFS range download error:', error);
         if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to view file' });
+          res.status(500).json({ error: 'Failed to stream file range' });
         }
       });
 
-      downloadStream.pipe(res);
-      return;
+      downloadStream.on('end', () => {
+        console.log(`✅ Range request completed: ${start}-${end}`);
+      });
+
+      return downloadStream.pipe(res);
     }
     
-    // Stream entire file
+    // Stream entire file (no range request)
+    console.log(`📄 Streaming entire file: ${file.originalName}`);
+    
     const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
     
     downloadStream.on('error', (error) => {
-      console.error('GridFS view error:', error);
+      console.error('❌ GridFS full download error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to view file' });
+        res.status(500).json({ error: 'Failed to stream file' });
       }
     });
 
+    downloadStream.on('end', () => {
+      console.log(`✅ File streaming completed: ${file.originalName}`);
+    });
+
     downloadStream.pipe(res);
+    
   } catch (error) {
-    console.error('Error viewing file:', error);
+    console.error('❌ Error viewing file:', error);
     res.status(500).json({ 
       error: 'Failed to view file',
+      message: error.message 
+    });
+  }
+});
+
+// GET /api/files/:fileId/download - Enhanced for deployment
+app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
+  console.log(`⬇️  Download request for file: ${req.params.fileId} from ${req.ip}`);
+  
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
+      return res.status(400).json({ error: 'Invalid file ID' });
+    }
+
+    const file = await File.findById(req.params.fileId).lean();
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Check if file exists in GridFS
+    const files = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
+    if (files.length === 0) {
+      return res.status(404).json({ 
+        error: 'File no longer exists in storage',
+        message: 'This file may have been deleted'
+      });
+    }
+
+    const gridFSFile = files[0];
+
+    // Enhanced CORS headers for downloads
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition');
+    
+    // Download-specific headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', gridFSFile.length);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    
+    console.log(`⬇️  Starting download: ${file.originalName} (${gridFSFile.length} bytes)`);
+    
+    // Create download stream from GridFS
+    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
+    
+    downloadStream.on('error', (error) => {
+      console.error('❌ GridFS download error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download file' });
+      }
+    });
+
+    downloadStream.on('end', () => {
+      console.log(`✅ Download completed: ${file.originalName}`);
+    });
+
+    downloadStream.pipe(res);
+    
+  } catch (error) {
+    console.error('❌ Error downloading file:', error);
+    res.status(500).json({ 
+      error: 'Failed to download file',
       message: error.message 
     });
   }
@@ -1078,7 +1160,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Enhanced health check endpoint with GridFS testing
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1088,9 +1170,9 @@ app.get('/api/health', async (req, res) => {
     3: 'Disconnecting'
   };
 
-  // Check GridFS bucket
   let gridFSStatus = 'Not initialized';
   let gridFSFileCount = 0;
+  let gridFSTestPassed = false;
   let dbError = null;
   
   if (dbStatus === 1 && gridFSBucket) {
@@ -1099,21 +1181,23 @@ app.get('/api/health', async (req, res) => {
       const fileCount = await File.countDocuments();
       gridFSFileCount = fileCount;
       
-      // Test GridFS connectivity
+      // Test GridFS connectivity by listing files
       const gridFSFiles = await gridFSBucket.find().limit(1).toArray();
+      gridFSTestPassed = true;
       gridFSStatus = `Ready - ${gridFSFiles.length > 0 ? 'Files available' : 'No files yet'}`;
     } catch (error) {
       dbError = error.message;
       gridFSStatus = 'Error: ' + error.message;
+      gridFSTestPassed = false;
     }
   }
 
-  const overallStatus = (dbStatus === 1 && gridFSBucket) ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1 && gridFSBucket && gridFSTestPassed) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
-    message: `Server is ${overallStatus === 'OK' ? 'healthy' : 'experiencing issues'}`,
+    message: `Server is ${overallStatus === 'OK' ? 'healthy and ready' : 'experiencing issues'}`,
     timestamp: new Date().toISOString(),
     baseURL,
     services: {
@@ -1129,10 +1213,21 @@ app.get('/api/health', async (req, res) => {
         bucket: 'pdfs',
         status: gridFSStatus,
         ready: !!gridFSBucket,
+        testPassed: gridFSTestPassed,
         fileCount: gridFSFileCount
+      },
+      cors: {
+        status: 'Enhanced for PDF serving',
+        origins: 'All origins allowed for file serving',
+        headers: 'Range requests supported'
       }
     },
     environment: process.env.NODE_ENV || 'development',
+    deployment: {
+      platform: process.env.RENDER_EXTERNAL_URL ? 'Render.com' : 'Other',
+      external_url: process.env.RENDER_EXTERNAL_URL || null,
+      detected_host: req.get('host')
+    },
     uptime: Math.floor(process.uptime()),
     uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
     version: process.env.npm_package_version || '1.0.0',
@@ -1141,8 +1236,108 @@ app.get('/api/health', async (req, res) => {
       apiBase: baseURL,
       health: `${baseURL}/api/health`,
       files: `${baseURL}/api/files`,
-      upload: `${baseURL}/api/upload`
+      testPDF: `${baseURL}/api/test-pdf`,
+      upload: `${baseURL}/api/upload`,
+      testPDFServing: `${baseURL}/api/test-pdf-serving`,
+      debugDeployment: `${baseURL}/api/debug/deployment`
     }
+  });
+});
+
+// Test endpoint for PDF serving with embedded test PDF
+app.get('/api/test-pdf-serving', requireDB, async (req, res) => {
+  try {
+    // Get a sample file from the database
+    const sampleFile = await File.findOne().lean();
+    
+    if (!sampleFile) {
+      return res.json({
+        status: 'No files available for testing',
+        message: 'Upload a PDF file first to test the serving functionality',
+        instructions: [
+          '1. Upload a PDF file using the upload endpoint',
+          '2. Use the returned file ID to test view/download',
+          '3. Check browser network tab for any CORS or loading issues'
+        ]
+      });
+    }
+
+    const baseURL = getBaseURL(req);
+    
+    res.json({
+      status: 'PDF serving test ready',
+      testFile: {
+        id: sampleFile._id,
+        name: sampleFile.originalName,
+        size: sampleFile.fileSize,
+        uploadedAt: sampleFile.uploadedAt
+      },
+      testUrls: {
+        view: `${baseURL}/api/files/${sampleFile._id}/view`,
+        download: `${baseURL}/api/files/${sampleFile._id}/download`
+      },
+      deploymentChecks: {
+        baseURL: baseURL,
+        corsEnabled: true,
+        rangeRequestsSupported: true,
+        gridFSReady: !!gridFSBucket,
+        mongoConnected: mongoose.connection.readyState === 1
+      },
+      instructions: [
+        '1. Click the view URL to test PDF viewing in browser',
+        '2. Click the download URL to test PDF download',
+        '3. Open browser developer tools to check for errors',
+        '4. Look for CORS or network errors in console',
+        '5. Verify PDF loads correctly in new tab'
+      ],
+      troubleshooting: {
+        'PDF not loading': 'Check browser console for CORS errors',
+        'Download not working': 'Verify GridFS file exists and is accessible',
+        'Slow loading': 'Check network tab for range request support',
+        'CORS errors': 'Verify deployment environment CORS configuration'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'Test failed',
+      error: error.message,
+      troubleshooting: 'Check database connection and GridFS setup'
+    });
+  }
+});
+
+// Deployment-specific debugging endpoint
+app.get('/api/debug/deployment', (req, res) => {
+  const headers = req.headers;
+  const baseURL = getBaseURL(req);
+  
+  res.json({
+    deployment: {
+      NODE_ENV: process.env.NODE_ENV,
+      RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL,
+      PORT: process.env.PORT,
+      detected_baseURL: baseURL
+    },
+    request: {
+      host: headers.host,
+      origin: headers.origin,
+      referer: headers.referer,
+      userAgent: headers['user-agent'],
+      ip: req.ip,
+      ips: req.ips
+    },
+    mongodb: {
+      connected: mongoose.connection.readyState === 1,
+      host: process.env.MONGO_HOST,
+      database: process.env.MONGO_DB_NAME,
+      gridFSReady: !!gridFSBucket
+    },
+    recommendations: [
+      baseURL.includes('localhost') ? 'Development mode detected' : 'Production mode detected',
+      !process.env.RENDER_EXTERNAL_URL ? 'Consider setting RENDER_EXTERNAL_URL for better URL detection' : 'RENDER_EXTERNAL_URL configured',
+      mongoose.connection.readyState !== 1 ? 'Database connection issue detected' : 'Database connected successfully',
+      !gridFSBucket ? 'GridFS not initialized' : 'GridFS ready for file operations'
+    ]
   });
 });
 
@@ -1303,6 +1498,8 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/download - Download file',
       'GET /api/test-gridfs - Test GridFS serving',
       'GET /api/test-pdf - Test PDF serving',
+      'GET /api/test-pdf-serving - Test PDF serving functionality',
+      'GET /api/debug/deployment - Debug deployment issues',
       'DELETE /api/files/:id - Delete file'
     ],
     examples: {
@@ -1310,7 +1507,9 @@ app.use('*', (req, res) => {
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
       testGridFS: `${baseURL}/api/test-gridfs`,
-      testPDF: `${baseURL}/api/test-pdf`
+      testPDF: `${baseURL}/api/test-pdf`,
+      testPDFServing: `${baseURL}/api/test-pdf-serving`,
+      debugDeployment: `${baseURL}/api/debug/deployment`
     }
   });
 });
@@ -1318,7 +1517,7 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n📁 University Archive Server - GRIDFS IMPLEMENTATION`);
+  console.log(`\n📁 University Archive Server - ENHANCED GRIDFS IMPLEMENTATION`);
   console.log(`📡 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1328,9 +1527,9 @@ app.listen(PORT, async () => {
   console.log(`🔗 Server URL: ${serverURL}`);
   console.log(`💾 File Storage: GridFS (MongoDB)`);
   console.log(`🛡️  Security: Enhanced Helmet + CORS for PDF viewing`);
-  console.log(`🌐 CORS: Enabled for production origins`);
-  console.log(`📄 PDF Serving: Direct from MongoDB GridFS with range support`);
-  console.log(`🚀 Deployment Ready: Works in all environments`);
+  console.log(`🌐 CORS: Enhanced for deployment PDF serving`);
+  console.log(`📄 PDF Serving: Direct from MongoDB GridFS with enhanced range support`);
+  console.log(`🚀 Deployment Ready: Enhanced for production environments`);
   
   // Wait for database connection before initializing
   const waitForDB = setInterval(async () => {
@@ -1347,22 +1546,25 @@ app.listen(PORT, async () => {
       console.log('🔍 Health check:', `${serverURL}/api/health`);
       console.log('🧪 GridFS test:', `${serverURL}/api/test-gridfs`);
       console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
+      console.log('🧪 PDF serving test:', `${serverURL}/api/test-pdf-serving`);
+      console.log('🐛 Debug deployment:', `${serverURL}/api/debug/deployment`);
       
-      console.log('\n🔥 GRIDFS IMPLEMENTATION FEATURES:');
-      console.log('✅ Files stored directly in MongoDB');
-      console.log('✅ Works in all deployment environments');
-      console.log('✅ No local file system dependencies');
-      console.log('✅ Range request support for large PDFs');
-      console.log('✅ Automatic cleanup on upload errors');
-      console.log('✅ Full CRUD operations on files');
-      console.log('✅ Memory-efficient streaming');
+      console.log('\n🔥 ENHANCED GRIDFS IMPLEMENTATION FEATURES:');
+      console.log('✅ Enhanced PDF viewing with better CORS support');
+      console.log('✅ Improved range request handling for large PDFs');
+      console.log('✅ Enhanced caching with ETag support');
+      console.log('✅ Better error handling and logging');
+      console.log('✅ Deployment-specific debugging endpoints');
+      console.log('✅ Enhanced health check with GridFS testing');
+      console.log('✅ Memory-efficient chunked streaming');
       
-      console.log('\n🎯 PDF VIEWING FIXES APPLIED:');
-      console.log('✅ Fixed CORS headers for PDF viewing');
-      console.log('✅ Removed restrictive security headers');
-      console.log('✅ Added proper Content-Disposition headers');
-      console.log('✅ Enabled Access-Control-Allow-Origin for PDFs');
-      console.log('✅ Improved range request handling');
+      console.log('\n🎯 DEPLOYMENT ENHANCEMENTS APPLIED:');
+      console.log('✅ Enhanced CORS headers for PDF viewing');
+      console.log('✅ Improved range request validation');
+      console.log('✅ Added chunk size limits for memory safety');
+      console.log('✅ Enhanced caching headers for better performance');
+      console.log('✅ Added deployment debugging endpoints');
+      console.log('✅ Enhanced error logging for troubleshooting');
       
       try {
         const fileCount = await File.countDocuments();
