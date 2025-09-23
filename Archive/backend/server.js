@@ -123,52 +123,17 @@ const getBaseURL = (req) => {
   // Priority 4: Development
   return `http://localhost:${process.env.PORT || 5000}`;
 };
-
-// FIXED: Serve uploaded files with proper headers for PDF viewing
-app.use('/uploads', (req, res, next) => {
-  // Set proper headers for PDF files
-  const decodedPath = decodeURIComponent(req.path || '');
-  const relativePath = decodedPath.replace(/^\//, '');
-  const filePath = path.join(uploadsDir, relativePath);
-  
-  if (fs.existsSync(filePath) && decodedPath.toLowerCase().endsWith('.pdf')) {
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-    
-    // Handle range requests for large PDFs
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
-    const range = req.headers.range;
-    
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunksize = (end - start) + 1;
-      
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
-      res.setHeader('Content-Length', chunksize);
-      res.status(206);
-      
-      const stream = fs.createReadStream(filePath, { start, end });
-      stream.pipe(res);
-      return;
-    }
-    
-    res.setHeader('Content-Length', fileSize);
-  }
-  
-  next();
-}, express.static(uploadsDir, {
-  // Additional options for static file serving
+// SIMPLIFIED: Serve uploaded files directly with proper PDF headers
+app.use('/uploads', express.static(uploadsDir, {
   maxAge: '1y',
   etag: true,
   lastModified: true,
-  setHeaders: (res, path) => {
-    if (path.toLowerCase().endsWith('.pdf')) {
+  setHeaders: (res, filePath) => {
+    if (filePath.toLowerCase().endsWith('.pdf')) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
       res.setHeader('X-Content-Type-Options', 'nosniff');
     }
   }
