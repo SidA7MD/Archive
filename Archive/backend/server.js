@@ -104,24 +104,23 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // FIXED: Enhanced base URL function for proper production support
 const getBaseURL = (req) => {
-  // Priority 1: Check for custom environment variable
+  // Priority 1: Render's external URL (most reliable)
   if (process.env.RENDER_EXTERNAL_URL) {
     return process.env.RENDER_EXTERNAL_URL;
   }
   
-  // Priority 2: For production environments (including when NODE_ENV=development on Render)
+  // Priority 2: Direct Render host detection
   if (req && req.get('host') && req.get('host').includes('.onrender.com')) {
-    const protocol = req.get('x-forwarded-proto') || 'https';
-    return `${protocol}://${req.get('host')}`;
+    return `https://${req.get('host')}`;
   }
   
-  // Priority 3: Check NODE_ENV for production
-  if (process.env.NODE_ENV === 'production' && req) {
-    const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
-    return `${protocol}://${req.get('host')}`;
+  // Priority 3: Any production environment
+  if (process.env.NODE_ENV === 'production' && req && req.get('host')) {
+    // Force HTTPS for production
+    return `https://${req.get('host')}`;
   }
   
-  // Priority 4: Default to localhost for development
+  // Priority 4: Development
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
