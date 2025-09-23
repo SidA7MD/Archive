@@ -14,47 +14,10 @@ const app = express();
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Security middleware - UPDATED for GridFS
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:", "blob:"],
-      connectSrc: ["'self'", "https:"],
-      fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'self'", "blob:"],
-      mediaSrc: ["'self'", "blob:"],
-      frameSrc: ["'self'", "blob:"],
-      workerSrc: ["'self'", "blob:"],
-      childSrc: ["'self'", "blob:"],
-    },
-  },
-}));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api', limiter);
-
-// Upload rate limiting
-const uploadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: 'Too many upload attempts, please try again later.',
-});
-
-// CORS configuration
+// CORS configuration - FIXED for PDF viewing
 const corsOptions = {
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
     const allowedOrigins = [
@@ -87,11 +50,59 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Range'],
-  exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Range', 'Accept-Ranges'],
+  exposedHeaders: [
+    'Content-Disposition', 
+    'Content-Length', 
+    'Content-Range', 
+    'Accept-Ranges',
+    'Content-Type'
+  ],
   maxAge: 86400
 };
 
 app.use(cors(corsOptions));
+
+// Security middleware - FIXED for PDF viewing
+app.use(helmet({
+  crossOriginResourcePolicy: false, // Changed to false for PDF viewing
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:", "blob:"],
+      connectSrc: ["'self'", "https:"],
+      fontSrc: ["'self'", "https:", "data:"],
+      objectSrc: ["'none'"], // Changed from 'self' to 'none'
+      mediaSrc: ["'self'", "blob:"],
+      frameSrc: ["'self'", "blob:"],
+      workerSrc: ["'self'", "blob:"],
+      childSrc: ["'self'", "blob:"],
+      // PDF-specific directives
+      frameAncestors: ["'self'"],
+      formAction: ["'self'"]
+    },
+  },
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', limiter);
+
+// Upload rate limiting
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many upload attempts, please try again later.',
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -196,10 +207,10 @@ const Type = require('./models/Type');
 const Subject = require('./models/Subject');
 const Year = require('./models/Year');
 
-// UPDATED File model for GridFS
+// File model for GridFS
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true },
-  gridFSId: { type: mongoose.Schema.Types.ObjectId, required: true }, // GridFS file ID
+  gridFSId: { type: mongoose.Schema.Types.ObjectId, required: true },
   fileSize: { type: Number, required: true },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true },
@@ -213,7 +224,7 @@ const fileSchema = new mongoose.Schema({
 
 const File = mongoose.model('File', fileSchema);
 
-// Configure Multer for memory storage (since we're using GridFS)
+// Configure Multer for memory storage
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
@@ -376,7 +387,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files - List files with pagination and filtering - UPDATED for GridFS
+// GET /api/files - List files with pagination and filtering
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -435,7 +446,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/files - List all files for admin - UPDATED for GridFS
+// GET /api/admin/files - List all files for admin
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
     console.log('📁 Admin: Fetching all files...');
@@ -467,7 +478,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
   }
 });
 
-// PUT /api/files/:fileId - Update file metadata - UPDATED for GridFS
+// PUT /api/files/:fileId - Update file metadata
 app.put('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     const { fileId } = req.params;
@@ -584,7 +595,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload PDF to GridFS - COMPLETELY REWRITTEN
+// POST /api/upload - Upload PDF to GridFS
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -798,10 +809,11 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
     const gridFSFile = files[0];
 
     // Set proper download headers
-    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', gridFSFile.length);
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
     
     // Create download stream from GridFS
     const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
@@ -823,7 +835,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - View file from GridFS
+// GET /api/files/:fileId/view - View file from GridFS - FIXED for PDF viewing
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -846,13 +858,14 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
 
     const gridFSFile = files[0];
 
-    // Set proper headers for PDF viewing in browser
+    // FIXED: Set proper headers for PDF viewing in browser
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', gridFSFile.length);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins for PDF viewing
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year cache
     res.setHeader('X-Content-Type-Options', 'nosniff');
     
     // Handle range requests for large PDFs
@@ -861,13 +874,18 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
+      
+      if (start >= gridFSFile.length || end >= gridFSFile.length) {
+        res.setHeader('Content-Range', `bytes */${gridFSFile.length}`);
+        return res.status(416).end();
+      }
+
       const chunksize = (end - start) + 1;
       
       res.setHeader('Content-Range', `bytes ${start}-${end}/${gridFSFile.length}`);
       res.setHeader('Content-Length', chunksize);
       res.status(206);
       
-      // Create range stream from GridFS
       const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId, {
         start: start,
         end: end
@@ -884,7 +902,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return;
     }
     
-    // Create view stream from GridFS
+    // Stream entire file
     const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
     
     downloadStream.on('error', (error) => {
@@ -944,7 +962,7 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Statistics endpoint - UPDATED for GridFS
+// GET /api/admin/stats - Statistics endpoint
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -1060,7 +1078,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// Health check endpoint - UPDATED for GridFS
+// Health check endpoint
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1128,7 +1146,7 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// ADDED: Test endpoint for GridFS
+// Test endpoint for GridFS
 app.get('/api/test-gridfs', requireDB, async (req, res) => {
   try {
     // Get sample files from GridFS
@@ -1174,6 +1192,21 @@ app.get('/api/test-gridfs', requireDB, async (req, res) => {
       gridFSBucket: !!gridFSBucket
     });
   }
+});
+
+// NEW: Simple PDF test endpoint
+app.get('/api/test-pdf', (req, res) => {
+  // Create a simple PDF buffer for testing
+  const pdfBuffer = Buffer.from(
+    '%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n/Contents 4 0 R\n>>\nendobj\n4 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 12 Tf\n72 720 Td\n(Test PDF) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000239 00000 n \ntrailer\n<<\n/Size 5\n/Root 1 0 R\n>>\nstartxref\n320\n%%EOF',
+    'binary'
+  );
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'inline; filename="test.pdf"');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(pdfBuffer);
 });
 
 // Initialize default semesters
@@ -1269,13 +1302,15 @@ app.use('*', (req, res) => {
       'GET /api/files/:id/view - View file in browser',
       'GET /api/files/:id/download - Download file',
       'GET /api/test-gridfs - Test GridFS serving',
+      'GET /api/test-pdf - Test PDF serving',
       'DELETE /api/files/:id - Delete file'
     ],
     examples: {
       healthCheck: `${baseURL}/api/health`,
       listFiles: `${baseURL}/api/files?limit=5`,
       adminFiles: `${baseURL}/api/admin/files`,
-      testGridFS: `${baseURL}/api/test-gridfs`
+      testGridFS: `${baseURL}/api/test-gridfs`,
+      testPDF: `${baseURL}/api/test-pdf`
     }
   });
 });
@@ -1311,6 +1346,7 @@ app.listen(PORT, async () => {
       console.log('📋 Admin files:', `${serverURL}/api/admin/files`);
       console.log('🔍 Health check:', `${serverURL}/api/health`);
       console.log('🧪 GridFS test:', `${serverURL}/api/test-gridfs`);
+      console.log('🧪 PDF test:', `${serverURL}/api/test-pdf`);
       
       console.log('\n🔥 GRIDFS IMPLEMENTATION FEATURES:');
       console.log('✅ Files stored directly in MongoDB');
@@ -1321,11 +1357,12 @@ app.listen(PORT, async () => {
       console.log('✅ Full CRUD operations on files');
       console.log('✅ Memory-efficient streaming');
       
-      console.log('\n🎯 DEPLOYMENT BENEFITS:');
-      console.log('• No file system permissions issues');
-      console.log('• Files persist across deployments');
-      console.log('• Scalable storage solution');
-      console.log('• Built-in redundancy with MongoDB replica sets');
+      console.log('\n🎯 PDF VIEWING FIXES APPLIED:');
+      console.log('✅ Fixed CORS headers for PDF viewing');
+      console.log('✅ Removed restrictive security headers');
+      console.log('✅ Added proper Content-Disposition headers');
+      console.log('✅ Enabled Access-Control-Allow-Origin for PDFs');
+      console.log('✅ Improved range request handling');
       
       try {
         const fileCount = await File.countDocuments();
