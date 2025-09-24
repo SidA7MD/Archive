@@ -4,22 +4,35 @@ const cors = require('cors');
 const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const GridFSBucket = require('mongodb').GridFSBucket;
-const { Readable } = require('stream');
+const { Client, Storage, ID, Permission, Role } = require('node-appwrite');
 require('dotenv').config();
 
-console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - PRODUCTION BUILD');
-console.log('📝 NO PATH DEPENDENCIES - PURE GRIDFS STREAMING');
+console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - APPWRITE STORAGE');
+console.log('☁️ Using Appwrite Cloud Storage for PDF files');
 
 const app = express();
 
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
+// Initialize Appwrite client
+const appwriteClient = new Client();
+const appwriteStorage = new Storage(appwriteClient);
+
+// Configure Appwrite
+appwriteClient
+  .setEndpoint('https://cloud.appwrite.io/v1')
+  .setProject('68d44d58003180cc2ca4')
+  .setKey('standard_0ef5f53f332c1f8da64e540e25f629b13e44083e0376ee2599198acfd2e1d97c13c510954911db1eb5698b35a59655d13e24c7ed14d15b966bd2ecb8913fdb89fd693f35ecf152a50f300739f983b42753a66d1eedd80f7c2dc67ecb90e829b3917233e11a694e3dab1e65785cacfbc09655d97a821e7911d053280a4cc15369');
+
+const APPWRITE_BUCKET_ID = '68d44d9f0009b17ef7eb';
+
+console.log('☁️ Appwrite client configured');
+console.log(`📦 Using bucket: ${APPWRITE_BUCKET_ID}`);
+
 // Production-ready CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, direct access)
     if (!origin) return callback(null, true);
     
     const allowedOrigins = [
@@ -50,7 +63,6 @@ const corsOptions = {
     }
     
     console.warn('⚠️ CORS blocked origin:', origin);
-    // For development, be more permissive
     if (process.env.NODE_ENV !== 'production') {
       return callback(null, true);
     }
@@ -90,11 +102,11 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      imgSrc: ["'self'", "data:", "https:", "blob:"],
-      connectSrc: ["'self'", "https:", "wss:", "ws:"],
+      imgSrc: ["'self'", "data:", "https:", "blob:", "*.appwrite.io"],
+      connectSrc: ["'self'", "https:", "wss:", "ws:", "*.appwrite.io"],
       fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'self'", "blob:", "data:"],
-      mediaSrc: ["'self'", "blob:", "data:"],
+      objectSrc: ["'self'", "blob:", "data:", "*.appwrite.io"],
+      mediaSrc: ["'self'", "blob:", "data:", "*.appwrite.io"],
       frameSrc: ["'self'", "blob:", "data:"],
       workerSrc: ["'self'", "blob:"],
       childSrc: ["'self'", "blob:"],
@@ -105,10 +117,10 @@ app.use(helmet({
   },
 }));
 
-// Rate limiting with higher limits for production
+// Rate limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 300, // Increased for production use
+  windowMs: 15 * 60 * 1000,
+  max: 300,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -119,7 +131,7 @@ const generalLimiter = rateLimit({
 
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50, // Increased for legitimate use
+  max: 50,
   message: { error: 'Too many upload attempts, please try again later.' },
 });
 
@@ -127,57 +139,42 @@ app.use('/api', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Enhanced base URL detection for all deployment platforms
+// Base URL detection
 const getBaseURL = (req) => {
-  // 1. Explicit environment variable (highest priority)
   if (process.env.RENDER_EXTERNAL_URL) {
     return process.env.RENDER_EXTERNAL_URL;
   }
   
-  // 2. Check various forwarded headers
   const forwardedProto = req.get('x-forwarded-proto') || req.get('x-scheme');
   const forwardedHost = req.get('x-forwarded-host') || req.get('x-forwarded-server');
   const host = req.get('host');
   
-  // 3. Platform-specific detection
   if (host) {
-    // Render.com
     if (host.includes('.onrender.com')) {
       return `https://${host}`;
     }
-    
-    // Vercel
     if (host.includes('.vercel.app')) {
       return `https://${host}`;
     }
-    
-    // Netlify  
     if (host.includes('.netlify.app')) {
       return `https://${host}`;
     }
-    
-    // Heroku
     if (host.includes('.herokuapp.com')) {
       return `https://${host}`;
     }
-    
-    // Custom domain or forwarded host
     if (forwardedHost && forwardedProto) {
       return `${forwardedProto}://${forwardedHost}`;
     }
-    
-    // Production detection
     if (process.env.NODE_ENV === 'production') {
       const protocol = forwardedProto || (host.includes('localhost') ? 'http' : 'https');
       return `${protocol}://${host}`;
     }
   }
   
-  // 4. Development fallback
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
-// MongoDB connection with enhanced error handling
+// MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
@@ -198,7 +195,6 @@ let isConnecting = false;
 let reconnectTimeout;
 let retryCount = 0;
 const maxRetries = 10;
-let gridFSBucket;
 
 const connectDB = async () => {
   if (isConnecting) return;
@@ -207,13 +203,6 @@ const connectDB = async () => {
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
     console.log('✅ MongoDB connected successfully');
-    
-    // Initialize GridFS bucket
-    gridFSBucket = new GridFSBucket(mongoose.connection.db, {
-      bucketName: 'pdfs'
-    });
-    console.log('📁 GridFS bucket initialized');
-    
     retryCount = 0;
     isConnecting = false;
   } catch (error) {
@@ -231,10 +220,8 @@ const connectDB = async () => {
   }
 };
 
-// Initial connection
 connectDB();
 
-// Connection event listeners
 mongoose.connection.on('connected', () => {
   console.log('🟢 Mongoose connected');
 });
@@ -251,7 +238,7 @@ mongoose.connection.on('disconnected', () => {
   }
 });
 
-// Models (ensure these files exist)
+// Models
 let Semester, Type, Subject, Year, File;
 
 try {
@@ -265,28 +252,27 @@ try {
   process.exit(1);
 }
 
-// File model schema
+// File model schema for Appwrite
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  gridFSId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
+  appwriteFileId: { type: String, required: true, unique: true },
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
   type: { type: mongoose.Schema.Types.ObjectId, ref: 'Type', required: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
   year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year', required: true, index: true },
-  storageProvider: { type: String, default: 'gridfs' },
+  storageProvider: { type: String, default: 'appwrite' },
   uploadedAt: { type: Date, default: Date.now, index: true },
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Add compound indexes for better query performance
 fileSchema.index({ semester: 1, type: 1, subject: 1, year: 1 });
 fileSchema.index({ uploadedAt: -1 });
 
 File = mongoose.model('File', fileSchema);
 
-// Enhanced multer configuration
+// Multer configuration
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
@@ -307,7 +293,7 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
+    fileSize: 50 * 1024 * 1024,
     files: 1,
     fields: 10
   }
@@ -315,7 +301,7 @@ const upload = multer({
 
 // Database connection middleware
 const requireDB = (req, res, next) => {
-  if (mongoose.connection.readyState !== 1 || !gridFSBucket) {
+  if (mongoose.connection.readyState !== 1) {
     console.warn('⚠️ Database not ready for request:', req.originalUrl);
     return res.status(503).json({ 
       error: 'Service temporairement indisponible',
@@ -326,9 +312,20 @@ const requireDB = (req, res, next) => {
   next();
 };
 
-// ========== CRITICAL: ENHANCED FILE SERVING MIDDLEWARE ==========
-// This replaces ANY path.join() operations with pure string concatenation
+// Test Appwrite connection
+const testAppwriteConnection = async () => {
+  try {
+    console.log('☁️ Testing Appwrite connection...');
+    await appwriteStorage.listFiles(APPWRITE_BUCKET_ID);
+    console.log('✅ Appwrite connection successful');
+    return true;
+  } catch (error) {
+    console.error('❌ Appwrite connection failed:', error.message);
+    return false;
+  }
+};
 
+// File serving middleware
 app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
   const origin = req.get('origin');
   const userAgent = req.get('user-agent') || '';
@@ -343,7 +340,6 @@ app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
     timestamp: new Date().toISOString()
   });
   
-  // Set comprehensive CORS headers
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   } else {
@@ -355,21 +351,18 @@ app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type, Content-Disposition, X-Content-Type-Options');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Max-Age', '86400');
-  
-  // Enable range requests for PDF streaming
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   
   next();
 });
 
-// Enhanced OPTIONS handler
 app.options('/api/files/:fileId/:action(view|download)', (req, res) => {
   console.log('✋ CORS preflight:', req.params.action, req.params.fileId);
   res.status(204).end();
 });
 
-// ========== API ROUTES ==========
+// API ROUTES
 
 // GET /api/semesters
 app.get('/api/semesters', requireDB, async (req, res) => {
@@ -477,7 +470,6 @@ app.get('/api/files', requireDB, async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
     
-    // Build filter
     const filter = {};
     if (req.query.semester) filter.semester = req.query.semester;
     if (req.query.type) filter.type = req.query.type;
@@ -503,7 +495,7 @@ app.get('/api/files', requireDB, async (req, res) => {
       ...file,
       viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'gridfs',
+      storageProvider: 'appwrite',
       fileType: getFileExtension(file.originalName)
     }));
 
@@ -526,19 +518,15 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// Helper function to get file extension safely
 function getFileExtension(filename) {
   if (!filename || typeof filename !== 'string') return 'pdf';
   const parts = filename.split('.');
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : 'pdf';
 }
 
-// ========== CRITICAL: FILE SERVING ROUTES (NO PATH.JOIN) ==========
-
-// GET /api/files/:fileId/view - Stream PDF for inline viewing
+// GET /api/files/:fileId/view - Stream PDF for inline viewing via Appwrite
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  const startTime = Date.now();
   
   try {
     console.log(`👁️ VIEW REQUEST: ${fileId} from ${req.ip}`);
@@ -548,7 +536,6 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
 
-    // Find file document
     const file = await File.findById(fileId).lean();
     if (!file) {
       console.error('❌ File not found in database:', fileId);
@@ -559,80 +546,39 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       id: file._id,
       name: file.originalName,
       size: file.fileSize,
-      gridFSId: file.gridFSId
+      appwriteFileId: file.appwriteFileId
     });
 
-    // Check GridFS
-    const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (!gridFSFiles.length) {
-      console.error('❌ File missing from GridFS:', file.gridFSId);
-      return res.status(404).json({ error: 'Fichier manquant dans le stockage' });
-    }
+    try {
+      const appwriteFile = await appwriteStorage.getFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
+      console.log('☁️ Appwrite file confirmed:', {
+        id: appwriteFile.$id,
+        name: appwriteFile.name,
+        size: appwriteFile.sizeOriginal
+      });
 
-    const gridFSFile = gridFSFiles[0];
-    console.log('💾 GridFS file confirmed:', {
-      id: gridFSFile._id,
-      filename: gridFSFile.filename,
-      length: gridFSFile.length
-    });
-
-    // Set response headers for PDF viewing
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', gridFSFile.length);
-    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-
-    // Handle range requests for progressive loading
-    const range = req.headers.range;
-    if (range && range.startsWith('bytes=')) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10) || 0;
-      const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
-      const chunkSize = (end - start) + 1;
+      const viewUrl = `https://cloud.appwrite.io/v1/storage/buckets/${APPWRITE_BUCKET_ID}/files/${file.appwriteFileId}/view?project=68d44d58003180cc2ca4`;
       
-      if (start >= 0 && end < gridFSFile.length && start <= end) {
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${gridFSFile.length}`);
-        res.setHeader('Content-Length', chunkSize);
-        console.log(`📊 Range request: ${start}-${end}/${gridFSFile.length}`);
-      }
+      console.log('🔗 Redirecting to Appwrite view URL:', viewUrl);
+      res.redirect(viewUrl);
+
+    } catch (appwriteError) {
+      console.error('❌ File missing from Appwrite:', appwriteError.message);
+      return res.status(404).json({ error: 'Fichier manquant dans le stockage cloud' });
     }
-
-    // Create and pipe the download stream
-    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
-    
-    downloadStream.on('error', (error) => {
-      console.error('❌ GridFS stream error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Erreur de lecture du fichier' });
-      }
-    });
-
-    downloadStream.on('end', () => {
-      const duration = Date.now() - startTime;
-      console.log(`✅ View completed: ${file.originalName} in ${duration}ms`);
-    });
-
-    // Stream the file
-    downloadStream.pipe(res);
 
   } catch (error) {
     console.error('❌ View error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Erreur lors de la visualisation',
-        message: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
+    res.status(500).json({ 
+      error: 'Erreur lors de la visualisation',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
-// GET /api/files/:fileId/download - Force download
+// GET /api/files/:fileId/download - Force download via Appwrite
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  const startTime = Date.now();
   
   try {
     console.log(`⬇️ DOWNLOAD REQUEST: ${fileId} from ${req.ip}`);
@@ -642,7 +588,6 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
 
-    // Find file document
     const file = await File.findById(fileId).lean();
     if (!file) {
       console.error('❌ File not found in database:', fileId);
@@ -653,56 +598,32 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       id: file._id,
       name: file.originalName,
       size: file.fileSize,
-      gridFSId: file.gridFSId
+      appwriteFileId: file.appwriteFileId
     });
 
-    // Check GridFS
-    const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (!gridFSFiles.length) {
-      console.error('❌ File missing from GridFS:', file.gridFSId);
-      return res.status(404).json({ error: 'Fichier manquant dans le stockage' });
+    try {
+      const appwriteFile = await appwriteStorage.getFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
+
+      const downloadUrl = `https://cloud.appwrite.io/v1/storage/buckets/${APPWRITE_BUCKET_ID}/files/${file.appwriteFileId}/download?project=68d44d58003180cc2ca4`;
+      
+      console.log('🔗 Redirecting to Appwrite download URL:', downloadUrl);
+      res.redirect(downloadUrl);
+
+    } catch (appwriteError) {
+      console.error('❌ File missing from Appwrite:', appwriteError.message);
+      return res.status(404).json({ error: 'Fichier manquant dans le stockage cloud' });
     }
-
-    const gridFSFile = gridFSFiles[0];
-
-    // Set response headers for download
-    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Length', gridFSFile.length);
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);
-    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-    res.setHeader('Expires', '-1');
-    res.setHeader('Pragma', 'no-cache');
-
-    // Create and pipe the download stream
-    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
-    
-    downloadStream.on('error', (error) => {
-      console.error('❌ GridFS download stream error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Erreur de téléchargement du fichier' });
-      }
-    });
-
-    downloadStream.on('end', () => {
-      const duration = Date.now() - startTime;
-      console.log(`✅ Download completed: ${file.originalName} in ${duration}ms`);
-    });
-
-    // Stream the file
-    downloadStream.pipe(res);
 
   } catch (error) {
     console.error('❌ Download error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Erreur lors du téléchargement',
-        message: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
+    res.status(500).json({ 
+      error: 'Erreur lors du téléchargement',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
-// POST /api/upload - Upload files to GridFS
+// POST /api/upload - Upload files to Appwrite
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -729,42 +650,26 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     const session = await mongoose.startSession();
     
     try {
-      console.log('📤 Starting upload:', {
+      console.log('📤 Starting upload to Appwrite:', {
         name: req.file.originalname,
         size: req.file.size,
         type: req.file.mimetype,
         metadata: { semester, type, subject, year }
       });
 
-      let gridFSFileId;
+      let appwriteFileId;
 
       await session.withTransaction(async () => {
-        // Upload to GridFS first
-        const uploadStream = gridFSBucket.openUploadStream(req.file.originalname, {
-          metadata: {
-            originalName: req.file.originalname,
-            uploadedAt: new Date(),
-            semester,
-            type,
-            subject,
-            year
-          }
-        });
+        // Upload to Appwrite first
+        const uploadResult = await appwriteStorage.createFile(
+          APPWRITE_BUCKET_ID,
+          ID.unique(),
+          req.file.buffer,
+          [Permission.read(Role.any())]
+        );
 
-        const readableStream = new Readable();
-        readableStream.push(req.file.buffer);
-        readableStream.push(null);
-
-        await new Promise((resolve, reject) => {
-          readableStream.pipe(uploadStream);
-          
-          uploadStream.on('error', reject);
-          uploadStream.on('finish', () => {
-            gridFSFileId = uploadStream.id;
-            console.log('✅ GridFS upload completed:', gridFSFileId);
-            resolve();
-          });
-        });
+        appwriteFileId = uploadResult.$id;
+        console.log('✅ Appwrite upload completed:', appwriteFileId);
 
         // Create or find database entities
         let semesterDoc = await Semester.findOne({ name: semester }).session(session);
@@ -830,17 +735,17 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           console.log('➕ Created new year:', year);
         }
 
-        // Create file document
+        // Create file document with Appwrite file ID
         const fileDoc = new File({
           originalName: req.file.originalname,
-          gridFSId: gridFSFileId,
+          appwriteFileId: appwriteFileId,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'gridfs',
+          storageProvider: 'appwrite',
           uploadedAt: new Date()
         });
 
@@ -859,6 +764,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         console.log('✅ Upload successful:', {
           fileId: fileDoc._id,
           name: req.file.originalname,
+          appwriteFileId: appwriteFileId,
           viewUrl: responseFile.viewUrl,
           downloadUrl: responseFile.downloadUrl
         });
@@ -871,13 +777,13 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     } catch (error) {
       console.error('❌ Upload failed:', error);
       
-      // Cleanup GridFS file on error
-      if (gridFSFileId) {
+      // Cleanup Appwrite file on error
+      if (appwriteFileId) {
         try {
-          await gridFSBucket.delete(gridFSFileId);
-          console.log('🗑️ Cleaned up GridFS file');
+          await appwriteStorage.deleteFile(APPWRITE_BUCKET_ID, appwriteFileId);
+          console.log('🗑️ Cleaned up Appwrite file');
         } catch (cleanupError) {
-          console.error('❌ GridFS cleanup failed:', cleanupError);
+          console.error('❌ Appwrite cleanup failed:', cleanupError);
         }
       }
       
@@ -1002,7 +908,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// DELETE /api/files/:fileId - Delete file
+// DELETE /api/files/:fileId - Delete file from both Appwrite and database
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -1014,23 +920,23 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
-    console.log('🗑️ Deleting file:', { id: file._id, name: file.originalName });
+    console.log('🗑️ Deleting file:', { id: file._id, name: file.originalName, appwriteFileId: file.appwriteFileId });
 
-    let gridFSDeleted = false;
+    let appwriteDeleted = false;
     
     try {
-      await gridFSBucket.delete(file.gridFSId);
-      gridFSDeleted = true;
-      console.log('✅ GridFS file deleted');
+      await appwriteStorage.deleteFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
+      appwriteDeleted = true;
+      console.log('✅ Appwrite file deleted');
     } catch (error) {
-      console.warn('⚠️ GridFS deletion failed:', error.message);
+      console.warn('⚠️ Appwrite deletion failed:', error.message);
     }
 
     await File.findByIdAndDelete(req.params.fileId);
 
     res.json({ 
       message: 'Fichier supprimé avec succès',
-      gridFSDeleted,
+      appwriteDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -1057,7 +963,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       ...file,
       viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'gridfs',
+      storageProvider: 'appwrite',
       fileType: getFileExtension(file.originalName)
     }));
 
@@ -1068,7 +974,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Admin statistics
+// GET /api/admin/stats - Admin statistics with Appwrite info
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -1078,8 +984,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       totalSizeResult,
       filesByType,
       filesBySemester,
-      recentUploads,
-      gridFSStats
+      recentUploads
     ] = await Promise.all([
       File.countDocuments(),
       Semester.countDocuments(),
@@ -1129,9 +1034,18 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         .populate(['semester', 'type', 'subject'])
         .sort({ uploadedAt: -1 })
         .limit(10)
-        .lean(),
-      mongoose.connection.db.collection('pdfs.files').stats().catch(() => ({ count: 0, size: 0 }))
+        .lean()
     ]);
+
+    // Get Appwrite bucket info
+    let appwriteStats = { count: 0, size: 0 };
+    try {
+      const bucketFiles = await appwriteStorage.listFiles(APPWRITE_BUCKET_ID);
+      appwriteStats.count = bucketFiles.files.length;
+      appwriteStats.size = bucketFiles.files.reduce((total, file) => total + file.sizeOriginal, 0);
+    } catch (error) {
+      console.warn('⚠️ Could not fetch Appwrite stats:', error.message);
+    }
 
     const formatFileSize = (bytes) => {
       if (bytes === 0) return '0 Bytes';
@@ -1150,9 +1064,9 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         totalSubjects,
         totalSize: totalSizeResult[0]?.totalSize || 0,
         totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0),
-        gridFSFiles: gridFSStats.count || 0,
-        gridFSSize: gridFSStats.size || 0,
-        gridFSSizeFormatted: formatFileSize(gridFSStats.size || 0)
+        appwriteFiles: appwriteStats.count,
+        appwriteSize: appwriteStats.size,
+        appwriteSizeFormatted: formatFileSize(appwriteStats.size)
       },
       filesByType: filesByType.map(item => ({
         ...item,
@@ -1169,8 +1083,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         fileType: getFileExtension(file.originalName),
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageProvider: 'GridFS (MongoDB)',
-      storageLocation: 'MongoDB GridFS Collection: pdfs',
+      storageProvider: 'Appwrite Cloud',
+      storageLocation: `Appwrite Bucket: ${APPWRITE_BUCKET_ID}`,
       baseURL
     });
   } catch (error) {
@@ -1179,7 +1093,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/health - Enhanced health check
+// GET /api/health - Enhanced health check with Appwrite status
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1189,28 +1103,35 @@ app.get('/api/health', async (req, res) => {
     3: 'Disconnecting'
   };
 
-  let gridFSStatus = 'Not initialized';
-  let gridFSFileCount = 0;
-  let gridFSTestPassed = false;
+  let appwriteStatus = 'Not tested';
+  let appwriteFileCount = 0;
+  let appwriteTestPassed = false;
   let dbError = null;
+  let appwriteError = null;
   
-  if (dbStatus === 1 && gridFSBucket) {
+  // Test Appwrite connection
+  try {
+    const bucketFiles = await appwriteStorage.listFiles(APPWRITE_BUCKET_ID);
+    appwriteFileCount = bucketFiles.files.length;
+    appwriteTestPassed = true;
+    appwriteStatus = `Ready - ${bucketFiles.files.length} files`;
+  } catch (error) {
+    appwriteError = error.message;
+    appwriteStatus = 'Error: ' + error.message;
+    appwriteTestPassed = false;
+  }
+  
+  // Test database connection
+  if (dbStatus === 1) {
     try {
-      gridFSStatus = 'Ready';
       const fileCount = await File.countDocuments();
-      gridFSFileCount = fileCount;
-      
-      const gridFSFiles = await gridFSBucket.find().limit(1).toArray();
-      gridFSTestPassed = true;
-      gridFSStatus = `Ready - ${gridFSFiles.length > 0 ? 'Files available' : 'No files yet'}`;
+      console.log(`📊 Database file count: ${fileCount}`);
     } catch (error) {
       dbError = error.message;
-      gridFSStatus = 'Error: ' + error.message;
-      gridFSTestPassed = false;
     }
   }
 
-  const overallStatus = (dbStatus === 1 && gridFSBucket && gridFSTestPassed) ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1 && appwriteTestPassed) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
@@ -1223,16 +1144,15 @@ app.get('/api/health', async (req, res) => {
         status: dbStatusMap[dbStatus] || 'Unknown',
         host: process.env.MONGO_HOST,
         name: process.env.MONGO_DB_NAME,
-        fileCount: dbStatus === 1 ? gridFSFileCount : null,
         ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'GridFS (MongoDB)',
-        bucket: 'pdfs',
-        status: gridFSStatus,
-        ready: !!gridFSBucket,
-        testPassed: gridFSTestPassed,
-        fileCount: gridFSFileCount
+        provider: 'Appwrite Cloud',
+        bucket: APPWRITE_BUCKET_ID,
+        status: appwriteStatus,
+        ready: appwriteTestPassed,
+        fileCount: appwriteFileCount,
+        ...(appwriteError && { error: appwriteError })
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1242,7 +1162,7 @@ app.get('/api/health', async (req, res) => {
       detected_host: req.get('host')
     },
     uptime: Math.floor(process.uptime()),
-    version: '2.0.0-production'
+    version: '2.1.0-appwrite'
   });
 });
 
@@ -1341,7 +1261,7 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - PRODUCTION READY`);
+  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - APPWRITE STORAGE`);
   console.log(`🚀 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1349,11 +1269,20 @@ app.listen(PORT, async () => {
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
   console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`💾 Storage: GridFS (MongoDB) - ZERO PATH DEPENDENCIES`);
-  console.log(`📄 PDF Serving: Direct GridFS streaming with full CORS support`);
+  console.log(`☁️ Storage: Appwrite Cloud Storage`);
+  console.log(`📦 Bucket ID: ${APPWRITE_BUCKET_ID}`);
+  console.log(`📄 PDF Serving: Direct Appwrite CDN URLs with CORS support`);
+  
+  // Test Appwrite connection on startup
+  const appwriteConnected = await testAppwriteConnection();
+  if (appwriteConnected) {
+    console.log('✅ Appwrite storage ready');
+  } else {
+    console.warn('⚠️ Appwrite connection issues - check credentials');
+  }
   
   const waitForDB = setInterval(async () => {
-    if (mongoose.connection.readyState === 1 && gridFSBucket) {
+    if (mongoose.connection.readyState === 1) {
       clearInterval(waitForDB);
       
       console.log('🔧 Initializing application...');
@@ -1362,15 +1291,13 @@ app.listen(PORT, async () => {
       console.log('🎯 Server ready for requests');
       console.log('🩺 Health check:', `${serverURL}/api/health`);
       
-      console.log('\n🛠️ PRODUCTION FIXES:');
-      console.log('✅ ELIMINATED all path.join() operations');
-      console.log('✅ Pure GridFS streaming implementation');
-      console.log('✅ Enhanced CORS for cross-origin PDF access');  
-      console.log('✅ Range request support for large PDFs');
-      console.log('✅ Comprehensive error handling & logging');
-      console.log('✅ Production-grade security headers');
-      console.log('✅ Memory-safe file processing');
-      console.log('✅ Graceful shutdown handling');
+      console.log('\n🛠️ APPWRITE IMPLEMENTATION:');
+      console.log('✅ Replaced GridFS with Appwrite Cloud Storage');
+      console.log('✅ Direct CDN URLs for optimal performance');  
+      console.log('✅ Built-in CORS support from Appwrite');
+      console.log('✅ Automatic file optimization and caching');
+      console.log('✅ Production-ready cloud infrastructure');
+      console.log('✅ No path dependencies - pure cloud storage');
       
       try {
         const fileCount = await File.countDocuments();
@@ -1390,7 +1317,7 @@ app.listen(PORT, async () => {
   
   setTimeout(() => {
     clearInterval(waitForDB);
-    if (mongoose.connection.readyState !== 1 || !gridFSBucket) {
+    if (mongoose.connection.readyState !== 1) {
       console.log('⚠️ Started without complete DB initialization - will retry');
     }
   }, 30000);
