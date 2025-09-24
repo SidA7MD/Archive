@@ -256,10 +256,11 @@ try {
   process.exit(1);
 }
 
-// File model schema for local storage
+// File model schema for local storage (with legacy support)
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  fileName: { type: String, required: true }, // Actual file name on disk
+  fileName: { type: String }, // Actual file name on disk (new field)
+  appwriteFileId: { type: String }, // Legacy Appwrite file ID (old field)
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
@@ -275,6 +276,39 @@ fileSchema.index({ semester: 1, type: 1, subject: 1, year: 1 });
 fileSchema.index({ uploadedAt: -1 });
 
 File = mongoose.model('File', fileSchema);
+
+// Migration helper to handle old Appwrite records
+const handleLegacyFile = async (file) => {
+  console.log(`⚠️ Legacy file detected: ${file.originalName} (ID: ${file._id})`);
+  
+  // If it's an old Appwrite file (has appwriteFileId but no fileName)
+  if (file.appwriteFileId && !file.fileName) {
+    console.log(`🗑️ Removing legacy Appwrite file from database: ${file.originalName}`);
+    
+    try {
+      await File.findByIdAndDelete(file._id);
+      return { deleted: true, reason: 'Legacy Appwrite file removed' };
+    } catch (error) {
+      console.error('❌ Failed to delete legacy file:', error);
+      return { deleted: false, error: error.message };
+    }
+  }
+  
+  // If it has neither appwriteFileId nor fileName, it's corrupted
+  if (!file.appwriteFileId && !file.fileName) {
+    console.log(`🗑️ Removing corrupted file record: ${file.originalName}`);
+    
+    try {
+      await File.findByIdAndDelete(file._id);
+      return { deleted: true, reason: 'Corrupted file record removed' };
+    } catch (error) {
+      console.error('❌ Failed to delete corrupted file:', error);
+      return { deleted: false, error: error.message };
+    }
+  }
+  
+  return { deleted: false, reason: 'File appears valid' };
+};
 
 // Local file storage setup
 const storage = multer.diskStorage({
@@ -545,19 +579,53 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
+    console.log('📄 File found:', {
+      id: file._id,
+      name: file.originalName,
+      size: file.fileSize,
+      fileName: file.fileName,
+      appwriteFileId: file.appwriteFileId,
+      storageProvider: file.storageProvider
+    });
+
+    // Handle legacy files
+    if (!file.fileName || file.appwriteFileId) {
+      console.log('⚠️ Legacy or invalid file detected, attempting cleanup...');
+      
+      const migrationResult = await handleLegacyFile(file);
+      
+      if (migrationResult.deleted) {
+        return res.status(410).json({ 
+          error: 'Fichier legacy supprimé',
+          message: migrationResult.reason,
+          suggestion: 'Veuillez re-uploader ce fichier avec le nouveau système'
+        });
+      }
+      
+      return res.status(404).json({ 
+        error: 'Fichier incompatible',
+        message: 'Ce fichier provient de l\'ancien système et ne peut pas être affiché',
+        suggestion: 'Veuillez re-uploader ce fichier'
+      });
+    }
+
+    // Handle local files
     const filePath = path.join(UPLOADS_DIR, file.fileName);
     
     try {
       await fs.access(filePath);
-      console.log('📄 File exists, serving:', filePath);
+      console.log('📄 Local file exists, serving:', filePath);
       
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="' + file.originalName + '"');
+      res.setHeader('Content-Disposition', `inline; filename="${file.originalName}"`);
       res.sendFile(filePath);
       
     } catch (fileError) {
-      console.error('❌ File missing from disk:', filePath);
-      return res.status(404).json({ error: 'Fichier manquant sur le disque' });
+      console.error('❌ Local file missing from disk:', filePath);
+      return res.status(404).json({ 
+        error: 'Fichier manquant sur le disque',
+        suggestion: 'Veuillez re-uploader ce fichier'
+      });
     }
 
   } catch (error) {
@@ -587,19 +655,53 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
+    console.log('📄 Download file found:', {
+      id: file._id,
+      name: file.originalName,
+      size: file.fileSize,
+      fileName: file.fileName,
+      appwriteFileId: file.appwriteFileId,
+      storageProvider: file.storageProvider
+    });
+
+    // Handle legacy files
+    if (!file.fileName || file.appwriteFileId) {
+      console.log('⚠️ Legacy or invalid file detected, attempting cleanup...');
+      
+      const migrationResult = await handleLegacyFile(file);
+      
+      if (migrationResult.deleted) {
+        return res.status(410).json({ 
+          error: 'Fichier legacy supprimé',
+          message: migrationResult.reason,
+          suggestion: 'Veuillez re-uploader ce fichier avec le nouveau système'
+        });
+      }
+      
+      return res.status(404).json({ 
+        error: 'Fichier incompatible',
+        message: 'Ce fichier provient de l\'ancien système et ne peut pas être téléchargé',
+        suggestion: 'Veuillez re-uploader ce fichier'
+      });
+    }
+
+    // Handle local files
     const filePath = path.join(UPLOADS_DIR, file.fileName);
     
     try {
       await fs.access(filePath);
-      console.log('📄 File exists, forcing download:', filePath);
+      console.log('📄 Local file exists, forcing download:', filePath);
       
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'attachment; filename="' + file.originalName + '"');
+      res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
       res.sendFile(filePath);
       
     } catch (fileError) {
-      console.error('❌ File missing from disk:', filePath);
-      return res.status(404).json({ error: 'Fichier manquant sur le disque' });
+      console.error('❌ Local file missing from disk:', filePath);
+      return res.status(404).json({ 
+        error: 'Fichier manquant sur le disque',
+        suggestion: 'Veuillez re-uploader ce fichier'
+      });
     }
 
   } catch (error) {
@@ -918,14 +1020,16 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
 
     let diskDeleted = false;
     
-    // Delete from disk
-    try {
-      const filePath = path.join(UPLOADS_DIR, file.fileName);
-      await fs.unlink(filePath);
-      diskDeleted = true;
-      console.log('✅ File deleted from disk:', filePath);
-    } catch (error) {
-      console.warn('⚠️ Disk deletion failed:', error.message);
+    // Delete from disk (only if it's a local file)
+    if (file.fileName) {
+      try {
+        const filePath = path.join(UPLOADS_DIR, file.fileName);
+        await fs.unlink(filePath);
+        diskDeleted = true;
+        console.log('✅ File deleted from disk:', filePath);
+      } catch (error) {
+        console.warn('⚠️ Disk deletion failed:', error.message);
+      }
     }
 
     // Delete from database
@@ -1077,6 +1181,57 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
+// POST /api/admin/cleanup-legacy - Remove all legacy files
+app.post('/api/admin/cleanup-legacy', requireDB, async (req, res) => {
+  try {
+    console.log('🧹 Starting legacy file cleanup...');
+    
+    // Find all files that are legacy (have appwriteFileId but no fileName)
+    const legacyFiles = await File.find({
+      $or: [
+        { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
+        { appwriteFileId: { $exists: true, $ne: null }, fileName: null },
+        { appwriteFileId: { $exists: false }, fileName: { $exists: false } },
+        { appwriteFileId: null, fileName: null }
+      ]
+    });
+    
+    console.log(`📊 Found ${legacyFiles.length} legacy files to clean up`);
+    
+    let deletedCount = 0;
+    let errorCount = 0;
+    
+    for (const file of legacyFiles) {
+      try {
+        await File.findByIdAndDelete(file._id);
+        deletedCount++;
+        console.log(`✅ Deleted legacy file: ${file.originalName}`);
+      } catch (error) {
+        errorCount++;
+        console.error(`❌ Failed to delete file ${file.originalName}:`, error.message);
+      }
+    }
+    
+    console.log(`🧹 Cleanup complete: ${deletedCount} deleted, ${errorCount} errors`);
+    
+    res.json({
+      message: 'Legacy file cleanup completed',
+      stats: {
+        found: legacyFiles.length,
+        deleted: deletedCount,
+        errors: errorCount
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Cleanup failed:', error);
+    res.status(500).json({ 
+      error: 'Erreur lors du nettoyage',
+      message: error.message
+    });
+  }
+});
+
 // GET /api/health - Health check
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
@@ -1114,6 +1269,28 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
+  // Check migration status
+  let legacyFilesCount = 0;
+  let validFilesCount = 0;
+  
+  if (dbStatus === 1) {
+    try {
+      legacyFilesCount = await File.countDocuments({
+        $or: [
+          { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
+          { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
+        ]
+      });
+      
+      validFilesCount = await File.countDocuments({
+        fileName: { $exists: true, $ne: null },
+        appwriteFileId: { $exists: false }
+      });
+    } catch (error) {
+      console.error('❌ Error counting migration files:', error);
+    }
+  }
+
   const overallStatus = (dbStatus === 1 && storageTestPassed) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
 
@@ -1136,6 +1313,14 @@ app.get('/api/health', async (req, res) => {
         ready: storageTestPassed,
         ...(storageError && { error: storageError })
       }
+    },
+    migration: {
+      hasLegacyFiles: legacyFilesCount,
+      hasValidFiles: validFilesCount,
+      needsCleanup: legacyFilesCount > 0,
+      suggestion: legacyFilesCount > 0 ? 
+        'Run POST /api/admin/cleanup-legacy to remove legacy files' : 
+        'No legacy files detected'
     },
     environment: process.env.NODE_ENV || 'development',
     deployment: {
@@ -1263,26 +1448,51 @@ app.listen(PORT, async () => {
       console.log('🔧 Initializing application...');
       await initializeSemesters();
       
+      // Check for legacy files
+      try {
+        const legacyFilesCount = await File.countDocuments({
+          $or: [
+            { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
+            { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
+          ]
+        });
+        
+        const validFilesCount = await File.countDocuments({
+          fileName: { $exists: true, $ne: null },
+          appwriteFileId: { $exists: false }
+        });
+        
+        console.log(`📊 Migration Status: ${legacyFilesCount} legacy files, ${validFilesCount} valid files`);
+        
+        if (legacyFilesCount > 0) {
+          console.log('⚠️ Legacy files detected. Run POST /api/admin/cleanup-legacy to clean up');
+        }
+      } catch (error) {
+        console.log('⚠️ Could not check migration status:', error.message);
+      }
+      
       console.log('🎯 Server ready for requests');
       console.log('🩺 Health check:', `${serverURL}/api/health`);
       
-      console.log('\n🛠️ LOCAL STORAGE IMPLEMENTATION:');
-      console.log('✅ Replaced Appwrite with Local File Storage');
-      console.log('✅ Fixed all upload and CORS issues'); 
-      console.log('✅ Direct file serving with proper headers');
-      console.log('✅ Comprehensive error handling and cleanup');
-      console.log('✅ Production-ready local storage solution');
-      console.log('✅ No external dependencies - self-contained');
+      console.log('\n🛠️ LEGACY FILE MIGRATION IMPLEMENTED:');
+      console.log('✅ Detects and handles old Appwrite file records');
+      console.log('✅ Automatically cleans up corrupted file entries');
+      console.log('✅ Provides clear error messages for legacy files');
+      console.log('✅ Admin cleanup endpoint available');
+      console.log('✅ Health check shows migration status');
+      console.log('✅ Seamless transition from Appwrite to Local Storage');
       
       try {
         const fileCount = await File.countDocuments();
         console.log(`📊 Database contains ${fileCount} files`);
         
         if (fileCount > 0) {
-          const sampleFile = await File.findOne().lean();
-          console.log('📝 Sample file test URLs:');
-          console.log(`   View: ${serverURL}/api/files/${sampleFile._id}/view`);
-          console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
+          const sampleFile = await File.findOne({ fileName: { $exists: true, $ne: null } }).lean();
+          if (sampleFile) {
+            console.log('📝 Sample file test URLs:');
+            console.log(`   View: ${serverURL}/api/files/${sampleFile._id}/view`);
+            console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
+          }
         }
       } catch (error) {
         console.log('⚠️ Could not query files:', error.message);
