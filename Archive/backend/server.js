@@ -773,11 +773,10 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   });
 });
 
-// FIXED PDF VIEW ROUTE - Completely removed path.join() dependency
-// VIEW ROUTE - FIXED
+// VIEW ROUTE (inline in browser, PDF-friendly)
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  console.log(`📄 PDF View request for: ${fileId} from ${req.ip}`);
+  console.log(`📄 View request for: ${fileId}`);
 
   try {
     if (!fileId || !mongoose.Types.ObjectId.isValid(fileId)) {
@@ -785,29 +784,23 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
     }
 
     const file = await File.findById(fileId).lean();
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    if (!file) return res.status(404).json({ error: 'File not found' });
 
     const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (gridFSFiles.length === 0) {
-      return res.status(404).json({ error: 'File no longer exists in storage' });
+    if (!gridFSFiles.length) {
+      return res.status(404).json({ error: 'File not in GridFS' });
     }
-
     const gridFSFile = gridFSFiles[0];
 
     // Common headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Disposition, Accept-Ranges, Content-Range');
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
 
     const range = req.headers.range;
     if (range) {
-      // Handle range requests for partial content
+      // Partial content (e.g., PDF/video seeking)
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : gridFSFile.length - 1;
@@ -820,46 +813,34 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
 
       res.status(206);
       res.setHeader('Content-Range', `bytes ${start}-${end}/${gridFSFile.length}`);
-      res.setHeader('Content-Length', chunksize.toString());
+      res.setHeader('Content-Length', chunksize);
 
-      const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId, {
-        start,
-        end
+      const stream = gridFSBucket.openDownloadStream(file.gridFSId, { start, end });
+      stream.on('error', err => {
+        console.error('❌ GridFS range error:', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Stream error' });
       });
-
-      downloadStream.on('error', (error) => {
-        console.error('❌ GridFS range stream error:', error.message);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to stream PDF range' });
-        }
-      });
-
-      return downloadStream.pipe(res);
+      return stream.pipe(res);
     } else {
-      // Serve full file
-      res.setHeader('Content-Length', gridFSFile.length.toString());
-      console.log(`📄 Serving full file: ${file.originalName} (${gridFSFile.length} bytes)`);
-
-      const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
-
-      downloadStream.on('error', (error) => {
-        console.error('❌ GridFS full stream error:', error.message);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to stream full PDF' });
-        }
+      // Full file
+      res.setHeader('Content-Length', gridFSFile.length);
+      const stream = gridFSBucket.openDownloadStream(file.gridFSId);
+      stream.on('error', err => {
+        console.error('❌ GridFS full error:', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Stream error' });
       });
-
-      return downloadStream.pipe(res);
+      return stream.pipe(res);
     }
-  } catch (error) {
-    console.error('❌ Error serving PDF:', error.message);
-    res.status(500).json({ error: 'Failed to serve PDF', message: error.message });
+  } catch (err) {
+    console.error('❌ View route error:', err.message);
+    res.status(500).json({ error: 'Failed to serve file' });
   }
 });
-// DOWNLOAD ROUTE - FIXED
+
+// DOWNLOAD ROUTE (forces download)
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  console.log(`⬇️ Download request for: ${fileId} from ${req.ip}`);
+  console.log(`⬇️ Download request for: ${fileId}`);
 
   try {
     if (!fileId || !mongoose.Types.ObjectId.isValid(fileId)) {
@@ -867,37 +848,28 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
     }
 
     const file = await File.findById(fileId).lean();
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    if (!file) return res.status(404).json({ error: 'File not found' });
 
     const gridFSFiles = await gridFSBucket.find({ _id: file.gridFSId }).toArray();
-    if (gridFSFiles.length === 0) {
-      return res.status(404).json({ error: 'File no longer exists in storage' });
+    if (!gridFSFiles.length) {
+      return res.status(404).json({ error: 'File not in GridFS' });
     }
-
     const gridFSFile = gridFSFiles[0];
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Disposition');
+    // Headers to force download
     res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
-    res.setHeader('Content-Length', gridFSFile.length.toString());
+    res.setHeader('Content-Length', gridFSFile.length);
 
-    const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
-
-    downloadStream.on('error', (error) => {
-      console.error('❌ GridFS download stream error:', error.message);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to download file' });
-      }
+    const stream = gridFSBucket.openDownloadStream(file.gridFSId);
+    stream.on('error', err => {
+      console.error('❌ GridFS download error:', err.message);
+      if (!res.headersSent) res.status(500).json({ error: 'Download error' });
     });
-
-    return downloadStream.pipe(res);
-  } catch (error) {
-    console.error('❌ Error downloading file:', error.message);
-    res.status(500).json({ error: 'Failed to download file', message: error.message });
+    return stream.pipe(res);
+  } catch (err) {
+    console.error('❌ Download route error:', err.message);
+    res.status(500).json({ error: 'Failed to download file' });
   }
 });
 
