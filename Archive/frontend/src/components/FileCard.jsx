@@ -1,51 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle, ExternalLink } from 'lucide-react';
 
-// Enhanced API Configuration with better deployment support
+// Enhanced API Configuration for production deployment
 const API_CONFIG = {
   getBaseURL: () => {
-    // Check if we're in browser environment
     if (typeof window === 'undefined') return '';
     
-    // For localhost development
+    // For development
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:5000';
     }
     
-    // For production - Priority order for deployment detection
-    // 1. Environment variable (most reliable)
-    const envApiUrl = import.meta.env?.VITE_BACKEND_URL || import.meta.env?.REACT_APP_BACKEND_URL;
+    // Environment variable (highest priority)
+    const envApiUrl = import.meta.env?.VITE_BACKEND_URL || 
+                     import.meta.env?.REACT_APP_BACKEND_URL ||
+                     import.meta.env?.VITE_API_URL;
     if (envApiUrl) {
       return envApiUrl;
     }
     
-    // 2. Try to detect common deployment patterns
-    const hostname = window.location.hostname;
-    
-    // Render.com deployment
-    if (hostname.includes('onrender.com') || hostname.includes('.render.com')) {
-      return `https://${hostname.replace(/^.*?\./, 'archive-mi73.')}`; // Assumes your service name
-    }
-    
-    // Vercel deployment
-    if (hostname.includes('vercel.app')) {
-      return 'https://archive-mi73.onrender.com'; // Your backend URL
-    }
-    
-    // Netlify deployment
-    if (hostname.includes('netlify.app')) {
-      return 'https://archive-mi73.onrender.com'; // Your backend URL
-    }
-    
-    // 3. Fallback to your known production API URL
+    // Production fallback - your actual backend URL
     return 'https://archive-mi73.onrender.com';
   },
   
   getURL: (path) => {
     const baseURL = API_CONFIG.getBaseURL();
-    if (!baseURL) return path;
-    
-    // Ensure path starts with /
     const cleanPath = path.startsWith('/') ? path : '/' + path;
     return `${baseURL}${cleanPath}`;
   },
@@ -66,7 +45,6 @@ const API_CONFIG = {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         },
-        // Remove credentials for cross-origin health checks
         mode: 'cors'
       });
       
@@ -87,128 +65,81 @@ const API_CONFIG = {
   }
 };
 
-// Enhanced FileCard with better error handling and deployment fixes
+// Enhanced FileCard with better error recovery
 export const FileCard = ({ file, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
   
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  // Enhanced URL generation with better fallbacks
+  // Enhanced URL generation with multiple fallbacks
   const getFileURL = (type = 'view') => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     
-    // Priority order for different URL types
-    if (type === 'view') {
-      // For viewing PDFs - prioritize direct API endpoints
-      if (file._id) {
-        return `${baseUrl}/api/files/${file._id}/view`;
-      }
-      // Fallback to provided URLs
-      if (file.viewUrl && file.viewUrl.startsWith('http')) {
-        return file.viewUrl;
-      }
-      if (file.directUrl && file.directUrl.startsWith('http')) {
-        return file.directUrl;
-      }
-    } else if (type === 'download') {
-      // For downloading files
-      if (file._id) {
-        return `${baseUrl}/api/files/${file._id}/download`;
-      }
-      if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
-        return file.downloadUrl;
-      }
+    if (file._id) {
+      return `${baseUrl}/api/files/${file._id}/${type}`;
     }
+    
+    // Fallback to provided URLs
+    if (type === 'view' && file.viewUrl) return file.viewUrl;
+    if (type === 'download' && file.downloadUrl) return file.downloadUrl;
     
     return null;
   };
 
-  // Enhanced view handler with better error detection and fallbacks
+  // Enhanced view handler with better error recovery
   const handleView = async () => {
     try {
       setLoading(true);
       setError(null);
       
       const viewUrl = getFileURL('view');
-      
       if (!viewUrl) {
         throw new Error('URL de visualisation non disponible');
       }
 
-      console.log('Attempting to view PDF:', viewUrl);
+      console.log('Opening PDF:', viewUrl);
 
-      // Test if the URL is accessible before opening
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
+      // Test accessibility first
       try {
         const testResponse = await fetch(viewUrl, {
-          method: 'HEAD', // Use HEAD to check if resource exists without downloading
-          signal: controller.signal,
-          mode: 'cors'
+          method: 'HEAD',
+          mode: 'cors',
+          signal: AbortSignal.timeout(5000)
         });
         
-        clearTimeout(timeoutId);
-
         if (!testResponse.ok) {
-          throw new Error(`Fichier non accessible (HTTP ${testResponse.status})`);
+          throw new Error(`Serveur inaccessible (${testResponse.status})`);
         }
-
-        console.log('PDF accessibility test passed');
-        
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        console.warn('HEAD request failed, trying direct open:', fetchError.message);
-        // Continue with direct open - some servers don't support HEAD requests
+      } catch (testError) {
+        console.warn('HEAD test failed, proceeding with direct open:', testError.message);
+        // Continue anyway - some servers don't support HEAD
       }
 
-      setDebugInfo({
-        viewUrl,
-        method: 'Direct browser open (tested)',
-        timestamp: new Date().toISOString(),
-        fileId: file._id
-      });
-
-      // Try to open in new window/tab
+      // Open in new tab/window
       const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
       
       if (!newWindow) {
-        console.log('Popup blocked, using fallback method');
-        // Fallback: create a temporary link and click it
+        // Popup blocked - use fallback
         const link = document.createElement('a');
         link.href = viewUrl;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-      } else {
-        // Check if the window opened successfully
-        setTimeout(() => {
-          try {
-            if (newWindow.closed) {
-              console.log('Window was closed immediately - might indicate an error');
-            }
-          } catch (e) {
-            // Cross-origin access error is expected and fine
-          }
-        }, 1000);
       }
       
-    } catch (err) {
-      console.error('Error viewing file:', err);
-      setError(`Erreur lors de la visualisation: ${err.message}`);
+      setDebugInfo({
+        viewUrl,
+        method: 'Direct browser open',
+        timestamp: new Date().toISOString(),
+        fileId: file._id
+      });
       
-      // Offer alternative: direct download
+    } catch (err) {
+      console.error('View error:', err);
+      setError(`Erreur: ${err.message}`);
+      
       setDebugInfo({
         error: err.message,
         suggestion: 'Essayez de télécharger le fichier directement',
@@ -227,24 +158,22 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       setError(null);
       
       const downloadUrl = getFileURL('download');
-      
       if (!downloadUrl) {
         throw new Error('URL de téléchargement non disponible');
       }
 
       console.log('Starting download:', downloadUrl);
 
-      // For downloads, we can try a more robust approach
+      // Try fetch approach first
       try {
-        // Method 1: Try fetch with blob for better control
         const response = await fetch(downloadUrl, {
           method: 'GET',
           mode: 'cors',
-          credentials: 'omit' // Don't send credentials for file downloads
+          signal: AbortSignal.timeout(30000) // 30 second timeout
         });
 
         if (!response.ok) {
-          throw new Error(`Erreur serveur: ${response.status} ${response.statusText}`);
+          throw new Error(`Erreur serveur: ${response.status}`);
         }
 
         const blob = await response.blob();
@@ -253,42 +182,48 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         const link = document.createElement('a');
         link.href = url;
         link.download = file.originalName || 'document.pdf';
-        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         
-        // Clean up the blob URL
         setTimeout(() => window.URL.revokeObjectURL(url), 1000);
         
-        console.log('Download completed successfully');
-        
       } catch (fetchError) {
-        console.warn('Fetch download failed, trying direct method:', fetchError.message);
+        // Fallback to direct download
+        console.warn('Fetch failed, using direct method:', fetchError.message);
         
-        // Method 2: Fallback to direct window.open
-        const newWindow = window.open(downloadUrl, '_blank', 'noopener,noreferrer');
-        if (!newWindow) {
-          const link = document.createElement('a');
-          link.href = downloadUrl;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.download = file.originalName || 'document.pdf';
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.target = '_blank';
+        link.download = file.originalName || 'document.pdf';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       }
       
+      setDebugInfo({
+        downloadUrl,
+        method: 'Direct download',
+        timestamp: new Date().toISOString(),
+        fileId: file._id
+      });
+      
     } catch (err) {
-      console.error('Error downloading file:', err);
-      setError(`Erreur lors du téléchargement: ${err.message}`);
+      console.error('Download error:', err);
+      setError(`Téléchargement impossible: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Get theme and icon (keeping your existing logic)
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
   const getFileTheme = (fileName) => {
     const fileThemes = [
       { 
@@ -323,32 +258,25 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     
     switch (extension) {
       case 'pdf':
-      case 'doc':
-      case 'docx':
-      case 'txt':
         return <FileText {...iconProps} />;
       case 'jpg':
       case 'jpeg':
       case 'png':
       case 'gif':
       case 'svg':
-      case 'webp':
         return <Image {...iconProps} />;
       case 'mp3':
       case 'wav':
       case 'flac':
-      case 'ogg':
         return <Music {...iconProps} />;
       case 'mp4':
       case 'avi':
       case 'mov':
       case 'mkv':
-      case 'webm':
         return <Video {...iconProps} />;
       case 'zip':
       case 'rar':
       case '7z':
-      case 'tar':
         return <Archive {...iconProps} />;
       case 'js':
       case 'jsx':
@@ -357,8 +285,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       case 'html':
       case 'css':
       case 'py':
-      case 'java':
-      case 'cpp':
         return <Code {...iconProps} />;
       case 'xlsx':
       case 'xls':
@@ -370,9 +296,8 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   };
 
   const theme = getFileTheme(file.originalName || 'default');
-  const fileIcon = getFileIcon(file.originalName || 'file.txt');
+  const fileIcon = getFileIcon(file.originalName || 'file.pdf');
 
-  // Styles
   const containerStyles = {
     background: 'linear-gradient(145deg, #ffffff 0%, #f8fafc 100%)',
     border: '1px solid rgba(0,0,0,0.1)',
@@ -412,13 +337,27 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     WebkitBoxOrient: 'vertical',
   };
 
-  const sizeStyles = {
+  const errorStyles = {
+    background: 'rgba(239, 68, 68, 0.1)',
+    color: '#dc2626',
+    padding: '0.5rem',
+    borderRadius: '6px',
     fontSize: '0.75rem',
-    color: '#6b7280',
-    marginBottom: '1rem',
+    marginBottom: '0.5rem',
     display: 'flex',
     alignItems: 'center',
     gap: '0.25rem',
+  };
+
+  const debugStyles = {
+    background: 'rgba(59, 130, 246, 0.1)',
+    color: '#1d4ed8',
+    padding: '0.5rem',
+    borderRadius: '6px',
+    fontSize: '0.625rem',
+    marginBottom: '0.5rem',
+    fontFamily: 'monospace',
+    wordBreak: 'break-all',
   };
 
   const buttonsContainerStyles = {
@@ -456,29 +395,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     border: '1px solid rgba(0,0,0,0.1)',
   };
 
-  const errorStyles = {
-    background: 'rgba(239, 68, 68, 0.1)',
-    color: '#dc2626',
-    padding: '0.5rem',
-    borderRadius: '6px',
-    fontSize: '0.75rem',
-    marginBottom: '0.5rem',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.25rem',
-  };
-
-  const debugStyles = {
-    background: 'rgba(59, 130, 246, 0.1)',
-    color: '#1d4ed8',
-    padding: '0.5rem',
-    borderRadius: '6px',
-    fontSize: '0.625rem',
-    marginBottom: '0.5rem',
-    fontFamily: 'monospace',
-    wordBreak: 'break-all',
-  };
-
   return (
     <div style={containerStyles}>
       <div style={headerStyles}>
@@ -490,22 +406,30 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           {file.originalName || 'Document sans nom'}
         </h3>
         
-        <div style={sizeStyles}>
+        <div style={{ 
+          fontSize: '0.75rem', 
+          color: '#6b7280', 
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.25rem'
+        }}>
           <span>📊</span>
           {formatFileSize(file.fileSize || 0)}
         </div>
 
-        {/* Development debug info */}
+        {/* Debug information for development */}
         {(process.env.NODE_ENV === 'development' || window.location.hostname === 'localhost') && debugInfo && (
           <div style={debugStyles}>
-            <div>URL: {debugInfo.viewUrl}</div>
-            <div>Method: {debugInfo.method}</div>
+            <div><strong>Debug Info:</strong></div>
+            {debugInfo.viewUrl && <div>View URL: {debugInfo.viewUrl}</div>}
+            {debugInfo.downloadUrl && <div>Download URL: {debugInfo.downloadUrl}</div>}
+            {debugInfo.method && <div>Method: {debugInfo.method}</div>}
             {debugInfo.error && <div>Error: {debugInfo.error}</div>}
-            {debugInfo.suggestion && <div>Tip: {debugInfo.suggestion}</div>}
+            {debugInfo.suggestion && <div>Suggestion: {debugInfo.suggestion}</div>}
           </div>
         )}
 
-        {/* Error display */}
         {error && (
           <div style={errorStyles}>
             <AlertCircle size={16} />
@@ -513,7 +437,6 @@ export const FileCard = ({ file, apiBaseUrl }) => {
           </div>
         )}
 
-        {/* Action buttons */}
         <div style={buttonsContainerStyles}>
           <button
             style={viewButtonStyles}
@@ -539,3 +462,9 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     </div>
   );
 };
+
+// Export the API_CONFIG for use in other components
+export { API_CONFIG };
+
+// Optional: Default export for convenience
+export default FileCard;
