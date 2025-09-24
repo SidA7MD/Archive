@@ -36,11 +36,6 @@ export const AdminPage = () => {
         const response = await fetch(`${API_BASE_URL}/api/health`);
         const data = await response.json();
         console.log('Backend connection test:', data);
-        
-        // Check if Appwrite is working
-        if (data.services?.storage?.provider === 'Appwrite Cloud') {
-          console.log('Appwrite storage status:', data.services.storage.status);
-        }
       } catch (error) {
         console.error('Backend connection failed:', error);
         setMessage('Erreur: Impossible de se connecter au serveur backend');
@@ -48,14 +43,6 @@ export const AdminPage = () => {
     };
     testConnection();
   }, []);
-
-  // Auto-clear messages after 5 seconds
-  useEffect(() => {
-    if (message) {
-      const timer = setTimeout(() => setMessage(''), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [message]);
 
   // --- Auth ---
   const handleLogin = (e) => {
@@ -84,7 +71,6 @@ export const AdminPage = () => {
     });
     setMessage('');
     setFiles([]);
-    setStats(null);
   };
 
   useEffect(() => {
@@ -97,24 +83,11 @@ export const AdminPage = () => {
   const loadFiles = async () => {
     setLoading(true);
     try {
-      console.log('Loading files from:', `${API_BASE_URL}/api/admin/files`);
-      const response = await fetch(`${API_BASE_URL}/api/admin/files`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
+      const response = await fetch(`${API_BASE_URL}/api/admin/files`);
       const data = await response.json();
-      console.log('Files loaded:', data.length, 'files');
-      setFiles(data);
-      setMessage('');
+      if (response.ok) setFiles(data);
+      else setMessage('Erreur lors du chargement des fichiers: ' + data.error);
     } catch (error) {
-      console.error('Error loading files:', error);
       setMessage('Erreur lors du chargement des fichiers: ' + error.message);
     } finally {
       setLoading(false);
@@ -123,22 +96,10 @@ export const AdminPage = () => {
 
   const loadStats = async () => {
     try {
-      console.log('Loading stats from:', `${API_BASE_URL}/api/admin/stats`);
-      const response = await fetch(`${API_BASE_URL}/api/admin/stats`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Stats loaded:', data);
-        setStats(data);
-      } else {
-        console.warn('Failed to load stats:', response.status);
-      }
-    } catch (error) {
+      const response = await fetch(`${API_BASE_URL}/api/admin/stats`);
+      const data = await response.json();
+      if (response.ok) setStats(data);
+    } catch (error) { 
       console.error('Error loading stats:', error);
     }
   };
@@ -154,25 +115,16 @@ export const AdminPage = () => {
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    console.log('File selected:', file ? {
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      lastModified: file.lastModified
-    } : null);
-    
+    console.log('File selected:', file);
     setFormData(prev => ({
       ...prev,
       pdf: file
     }));
   };
 
-  // --- UPLOAD --- ENHANCED FOR APPWRITE
+  // --- UPLOAD ---
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    // Clear any existing messages
-    setMessage('');
     
     // Get the actual file from the file input element as backup
     const fileInput = document.getElementById('pdf-input');
@@ -185,9 +137,7 @@ export const AdminPage = () => {
       subject: formData.subject,
       year: formData.year,
       formDataPdf: formData.pdf,
-      selectedFile: selectedFile,
-      fileInputValue: fileInput?.value,
-      fileInputFiles: fileInput?.files[0]
+      selectedFile: selectedFile
     });
 
     // Validate all fields including the file
@@ -203,29 +153,24 @@ export const AdminPage = () => {
     }
 
     // Additional file validation
-    if (selectedFile.type !== 'application/pdf') {
+    if (selectedFile && selectedFile.type !== 'application/pdf') {
       setMessage('Veuillez sélectionner un fichier PDF valide.');
       return;
     }
 
-    if (selectedFile.size > 50 * 1024 * 1024) { // 50MB
+    if (selectedFile && selectedFile.size > 50 * 1024 * 1024) { // 50MB
       setMessage('Le fichier est trop volumineux. Taille maximum: 50MB.');
       return;
     }
 
-    if (selectedFile.size === 0) {
-      setMessage('Le fichier sélectionné est vide.');
-      return;
-    }
-
     setUploading(true);
-    setMessage('Upload en cours vers Appwrite...');
+    setMessage('');
 
     const uploadData = new FormData();
-    uploadData.append('semester', formData.semester.trim());
-    uploadData.append('type', formData.type.trim());
-    uploadData.append('subject', formData.subject.trim());
-    uploadData.append('year', formData.year.trim());
+    uploadData.append('semester', formData.semester);
+    uploadData.append('type', formData.type);
+    uploadData.append('subject', formData.subject);
+    uploadData.append('year', formData.year);
     uploadData.append('pdf', selectedFile);
 
     // Debug FormData contents
@@ -242,29 +187,16 @@ export const AdminPage = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
-        body: uploadData,
-        // Don't set Content-Type header - let browser set it with boundary
+        body: uploadData
       });
 
       console.log('Upload response status:', response.status);
       
-      let responseData;
-      const contentType = response.headers.get('content-type');
-      
-      if (contentType && contentType.includes('application/json')) {
-        responseData = await response.json();
-      } else {
-        const text = await response.text();
-        console.error('Non-JSON response:', text);
-        responseData = { error: 'Réponse serveur invalide: ' + text };
-      }
-      
+      const responseData = await response.json();
       console.log('Upload response data:', responseData);
 
       if (response.ok) {
-        setMessage('Fichier uploadé avec succès vers Appwrite Cloud Storage!');
-        
-        // Reset form
+        setMessage('Fichier uploadé avec succès!');
         setFormData({
           semester: 'S1',
           type: 'cours',
@@ -272,27 +204,16 @@ export const AdminPage = () => {
           year: '',
           pdf: null
         });
-        
-        // Clear file input
+        const fileInput = document.getElementById('pdf-input');
         if (fileInput) fileInput.value = '';
-        
-        // Refresh files list if on manage tab
-        if (activeTab === 'manage') {
-          setTimeout(loadFiles, 1000); // Small delay to ensure Appwrite has processed
-        }
+        if (activeTab === 'manage') loadFiles();
+        if (activeTab === 'stats') loadStats();
       } else {
-        const errorMessage = responseData.error || responseData.message || 'Upload failed';
-        setMessage('Erreur lors de l\'upload: ' + errorMessage);
-        console.error('Upload failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          error: errorMessage,
-          fullResponse: responseData
-        });
+        setMessage('Erreur lors de l\'upload: ' + (responseData.error || 'Upload failed'));
       }
     } catch (error) {
       console.error('Upload error:', error);
-      setMessage('Erreur réseau lors de l\'upload: ' + error.message);
+      setMessage('Erreur lors de l\'upload: ' + error.message);
     } finally {
       setUploading(false);
     }
@@ -303,10 +224,10 @@ export const AdminPage = () => {
     setEditingFile({
       ...file,
       originalName: file.originalName,
-      semester: file.semester?.name || '',
-      type: file.type?.name || '',
-      subject: file.subject?.name || '',
-      year: String(file.year?.year || '')
+      semester: file.semester?.name || file.semester || '',
+      type: file.type?.name || file.type || '',
+      subject: file.subject?.name || file.subject || '',
+      year: file.year?.year || file.year || ''
     });
   };
 
@@ -320,28 +241,25 @@ export const AdminPage = () => {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
         },
         body: JSON.stringify({
-          originalName: editingFile.originalName.trim(),
-          semester: editingFile.semester.trim(),
-          type: editingFile.type.trim(),
-          subject: editingFile.subject.trim(),
-          year: editingFile.year.trim()
+          originalName: editingFile.originalName,
+          semester: editingFile.semester,
+          type: editingFile.type,
+          subject: editingFile.subject,
+          year: editingFile.year
         })
       });
       
       const data = await response.json();
-      
       if (response.ok) {
         setMessage('Fichier mis à jour avec succès!');
         setEditingFile(null);
         loadFiles();
       } else {
-        setMessage('Erreur lors de la mise à jour: ' + (data.error || data.message || 'Update failed'));
+        setMessage('Erreur lors de la mise à jour: ' + (data.error || 'Update failed'));
       }
     } catch (error) {
-      console.error('Update error:', error);
       setMessage('Erreur lors de la mise à jour: ' + error.message);
     }
   };
@@ -352,41 +270,35 @@ export const AdminPage = () => {
 
   const deleteFile = async () => {
     if (!deleteConfirm) return;
-    
     try {
       const response = await fetch(`${API_BASE_URL}/api/files/${deleteConfirm._id}`, {
-        method: 'DELETE',
-        headers: {
-          'Accept': 'application/json'
-        }
+        method: 'DELETE'
       });
-      
       const data = await response.json();
-      
       if (response.ok) {
-        setMessage('Fichier supprimé avec succès d\'Appwrite et de la base de données!');
+        setMessage('Fichier supprimé avec succès!');
         setDeleteConfirm(null);
         loadFiles();
         if (activeTab === 'stats') loadStats();
       } else {
-        setMessage('Erreur lors de la suppression: ' + (data.error || data.message || 'Delete failed'));
+        setMessage('Erreur lors de la suppression: ' + (data.error || 'Delete failed'));
       }
     } catch (error) {
-      console.error('Delete error:', error);
       setMessage('Erreur lors de la suppression: ' + error.message);
     }
   };
 
   // --- FILTERS ---
   const filteredFiles = files.filter(file => {
-    if (!file) return false;
+    const matchesSearch = file.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (file.subject?.name && file.subject.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (file.subject && typeof file.subject === 'string' && file.subject.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    const matchesSearch = (
-      (file.originalName && file.originalName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (file.subject?.name && file.subject.name.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-    const matchesSemester = !filterSemester || file.semester?.name === filterSemester;
-    const matchesType = !filterType || file.type?.name === filterType;
+    const fileSemester = file.semester?.name || file.semester;
+    const matchesSemester = !filterSemester || fileSemester === filterSemester;
+    
+    const fileType = file.type?.name || file.type;
+    const matchesType = !filterType || fileType === filterType;
     
     return matchesSearch && matchesSemester && matchesType;
   });
@@ -400,24 +312,15 @@ export const AdminPage = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      return new Date(dateString).toLocaleDateString('fr-FR');
-    } catch (error) {
-      return 'Date invalide';
-    }
-  };
-
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleLogin(e);
   };
 
-  // --- VIEW FILE HELPER ---
-  const openFileInNewTab = (file) => {
-    const viewUrl = `${API_BASE_URL}/api/files/${file._id}/view`;
-    console.log('Opening file:', viewUrl);
-    window.open(viewUrl, '_blank', 'noopener,noreferrer');
+  // Get display name for semester/type
+  const getDisplayName = (item, field) => {
+    if (!item) return '';
+    if (typeof item === 'string') return item;
+    return item.displayName || item.name || item;
   };
 
   // --- RENDER ---
@@ -468,7 +371,7 @@ export const AdminPage = () => {
       <div className={styles.adminContainer}>
         <div className={styles.adminHeader}>
           <h1 className={`${styles.adminTitle} ${styles.h1}`}>
-            Administration - Gestion des Fichiers (Appwrite Storage)
+            Administration - Gestion des Fichiers
           </h1>
           <button onClick={handleLogout} className={styles.logoutButton} type="button">
             Déconnexion
@@ -480,95 +383,84 @@ export const AdminPage = () => {
           <button
             className={`${styles.tabButton} ${activeTab === 'upload' ? styles.active : ''}`}
             onClick={() => setActiveTab('upload')}
-          >
-            📤 Upload vers Appwrite
-          </button>
+          >📤 Upload</button>
           <button
             className={`${styles.tabButton} ${activeTab === 'manage' ? styles.active : ''}`}
             onClick={() => setActiveTab('manage')}
-          >
-            📁 Gérer les Fichiers
-          </button>
+          >📁 Gérer les Fichiers</button>
           <button
             className={`${styles.tabButton} ${activeTab === 'stats' ? styles.active : ''}`}
             onClick={() => setActiveTab('stats')}
-          >
-            📊 Statistiques
-          </button>
+          >📊 Statistiques</button>
         </div>
 
         {/* Upload Tab */}
         {activeTab === 'upload' && (
-          <div>
-            <div className={styles.uploadInfo}>
-              <p>🚀 Fichiers stockés dans Appwrite Cloud Storage pour une performance optimale</p>
+          <form onSubmit={handleSubmit} className={styles.uploadForm}>
+            <div className={styles.formGroup}>
+              <label htmlFor="semester">Semestre</label>
+              <select id="semester" name="semester" value={formData.semester} onChange={handleInputChange} required>
+                <option value="S1">Semestre 1</option>
+                <option value="S2">Semestre 2</option>
+                <option value="S3">Semestre 3</option>
+                <option value="S4">Semestre 4</option>
+                <option value="S5">Semestre 5</option>
+              </select>
             </div>
-            <form onSubmit={handleSubmit} className={styles.uploadForm}>
-              <div className={styles.formGroup}>
-                <label htmlFor="semester">Semestre</label>
-                <select id="semester" name="semester" value={formData.semester} onChange={handleInputChange} required>
-                  <option value="S1">Semestre 1</option>
-                  <option value="S2">Semestre 2</option>
-                  <option value="S3">Semestre 3</option>
-                  <option value="S4">Semestre 4</option>
-                  <option value="S5">Semestre 5</option>
-                </select>
-              </div>
-              <div className={styles.formGroup}>
-                <label htmlFor="type">Type</label>
-                <select id="type" name="type" value={formData.type} onChange={handleInputChange} required>
-                  <option value="cours">Cours</option>
-                  <option value="tp">Travaux Pratiques</option>
-                  <option value="td">Travaux Dirigés</option>
-                  <option value="devoirs">Devoirs</option>
-                  <option value="compositions">Compositions</option>
-                  <option value="ratrapages">Rattrapages</option>
-                </select>
-              </div>
-              <div className={styles.formGroup}>
-                <label htmlFor="subject">Matière</label>
-                <input
-                  id="subject"
-                  name="subject"
-                  type="text"
-                  value={formData.subject}
-                  onChange={handleInputChange}
-                  placeholder="Ex: Mathématiques, Physique..."
-                  required
-                />
-              </div>
-              <div className={styles.formGroup}>
-                <label htmlFor="year">Année</label>
-                <input
-                  id="year"
-                  name="year"
-                  type="text"
-                  value={formData.year}
-                  onChange={handleInputChange}
-                  placeholder="Ex: 2024, 2023-2024"
-                  required
-                />
-              </div>
-              <div className={`${styles.formGroup} ${styles.fullWidth}`}>
-                <label htmlFor="pdf-input">Fichier PDF (Max 50MB)</label>
-                <input
-                  id="pdf-input"
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleFileChange}
-                  required
-                />
-                {formData.pdf && (
-                  <div className={styles.fileInfo}>
-                    ✅ Fichier sélectionné: {formData.pdf.name} ({formatFileSize(formData.pdf.size)})
-                  </div>
-                )}
-              </div>
-              <button type="submit" disabled={uploading} className={styles.submitButton}>
-                {uploading ? '⏳ Upload vers Appwrite en cours...' : '🚀 Uploader vers Appwrite Cloud'}
-              </button>
-            </form>
-          </div>
+            <div className={styles.formGroup}>
+              <label htmlFor="type">Type</label>
+              <select id="type" name="type" value={formData.type} onChange={handleInputChange} required>
+                <option value="cours">Cours</option>
+                <option value="tp">Travaux Pratiques</option>
+                <option value="td">Travaux Dirigés</option>
+                <option value="devoirs">Devoirs</option>
+                <option value="compositions">Compositions</option>
+                <option value="ratrapages">Rattrapages</option>
+              </select>
+            </div>
+            <div className={styles.formGroup}>
+              <label htmlFor="subject">Matière</label>
+              <input
+                id="subject"
+                name="subject"
+                type="text"
+                value={formData.subject}
+                onChange={handleInputChange}
+                placeholder="Ex: Mathématiques, Physique..."
+                required
+              />
+            </div>
+            <div className={styles.formGroup}>
+              <label htmlFor="year">Année</label>
+              <input
+                id="year"
+                name="year"
+                type="text"
+                value={formData.year}
+                onChange={handleInputChange}
+                placeholder="Ex: 2024, 2023-2024"
+                required
+              />
+            </div>
+            <div className={`${styles.formGroup} ${styles.fullWidth}`}>
+              <label htmlFor="pdf-input">Fichier PDF</label>
+              <input
+                id="pdf-input"
+                type="file"
+                accept=".pdf"
+                onChange={handleFileChange}
+                required
+              />
+              {formData.pdf && (
+                <div className={styles.fileInfo}>
+                  Fichier sélectionné: {formData.pdf.name} ({formatFileSize(formData.pdf.size)})
+                </div>
+              )}
+            </div>
+            <button type="submit" disabled={uploading} className={styles.submitButton}>
+              {uploading ? 'Upload en cours...' : 'Uploader le fichier'}
+            </button>
+          </form>
         )}
 
         {/* Manage Files Tab */}
@@ -604,18 +496,16 @@ export const AdminPage = () => {
                 </select>
               </div>
               <button onClick={loadFiles} className={styles.refreshButton} disabled={loading}>
-                {loading ? '⏳' : '🔄'} Actualiser
+                🔄 Actualiser
               </button>
             </div>
 
             {loading ? (
-              <div className={styles.loading}>⏳ Chargement depuis Appwrite...</div>
+              <div className={styles.loading}>Chargement...</div>
             ) : (
               <div className={styles.filesTable}>
                 {filteredFiles.length === 0 ? (
-                  <div className={styles.noFiles}>
-                    {files.length === 0 ? 'Aucun fichier dans Appwrite' : 'Aucun fichier trouvé avec ces filtres'}
-                  </div>
+                  <div className={styles.noFiles}>Aucun fichier trouvé</div>
                 ) : (
                   <table>
                     <thead>
@@ -626,7 +516,6 @@ export const AdminPage = () => {
                         <th>Matière</th>
                         <th>Année</th>
                         <th>Taille</th>
-                        <th>Date</th>
                         <th>Stockage</th>
                         <th>Actions</th>
                       </tr>
@@ -666,7 +555,7 @@ export const AdminPage = () => {
                                 <option value="S5">S5</option>
                               </select>
                             ) : (
-                              <span>{file.semester?.displayName || file.semester?.name}</span>
+                              <span>{getDisplayName(file.semester)}</span>
                             )}
                           </td>
                           <td>
@@ -679,15 +568,15 @@ export const AdminPage = () => {
                                 })}
                                 className={styles.editSelect}
                               >
-                                <option value="cours">cours</option>
-                                <option value="tp">tp</option>
-                                <option value="td">td</option>
-                                <option value="devoirs">devoirs</option>
-                                <option value="compositions">compositions</option>
-                                <option value="ratrapages">ratrapages</option>
+                                <option value="cours">Cours</option>
+                                <option value="tp">TP</option>
+                                <option value="td">TD</option>
+                                <option value="devoirs">Devoirs</option>
+                                <option value="compositions">Compositions</option>
+                                <option value="ratrapages">Rattrapages</option>
                               </select>
                             ) : (
-                              <span>{file.type?.displayName || file.type?.name}</span>
+                              <span>{getDisplayName(file.type)}</span>
                             )}
                           </td>
                           <td>
@@ -702,7 +591,7 @@ export const AdminPage = () => {
                                 className={styles.editInput}
                               />
                             ) : (
-                              <span>{file.subject?.name}</span>
+                              <span>{getDisplayName(file.subject)}</span>
                             )}
                           </td>
                           <td>
@@ -717,14 +606,13 @@ export const AdminPage = () => {
                                 className={styles.editInput}
                               />
                             ) : (
-                              <span>{file.year?.year}</span>
+                              <span>{file.year?.year || file.year}</span>
                             )}
                           </td>
                           <td>{formatFileSize(file.fileSize)}</td>
-                          <td>{formatDate(file.uploadedAt)}</td>
                           <td>
                             <span className={styles.storageBadge}>
-                              {file.storageProvider === 'appwrite' ? '☁️ Appwrite' : '🗄️ Local'}
+                              {file.storageProvider === 'appwrite' ? '☁️ Appwrite' : '📁 Local'}
                             </span>
                           </td>
                           <td className={styles.actions}>
@@ -736,13 +624,13 @@ export const AdminPage = () => {
                             ) : (
                               <>
                                 <button onClick={() => startEditing(file)} className={styles.editButton} title="Modifier">✏️</button>
-                                <button 
-                                  onClick={() => openFileInNewTab(file)} 
-                                  className={styles.viewButton} 
-                                  title="Voir le PDF"
-                                >
-                                  👁️
-                                </button>
+                                <a
+                                  href={`${API_BASE_URL}/api/files/${file._id}/view`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={styles.viewButton}
+                                  title="Voir le fichier"
+                                >👁️</a>
                                 <button onClick={() => confirmDelete(file)} className={styles.deleteButton} title="Supprimer">🗑️</button>
                               </>
                             )}
@@ -765,6 +653,9 @@ export const AdminPage = () => {
                 <div className={styles.statCard}>
                   <h3>📁 Total Fichiers</h3>
                   <div className={styles.statNumber}>{stats.overview?.totalFiles || 0}</div>
+                  <div className={styles.statSubtitle}>
+                    {stats.overview?.appwriteFiles && `☁️ ${stats.overview.appwriteFiles} dans Appwrite`}
+                  </div>
                 </div>
                 <div className={styles.statCard}>
                   <h3>📚 Semestres</h3>
@@ -777,16 +668,11 @@ export const AdminPage = () => {
                 <div className={styles.statCard}>
                   <h3>💾 Taille Totale</h3>
                   <div className={styles.statNumber}>{stats.overview?.totalSizeFormatted || '0 Bytes'}</div>
+                  <div className={styles.statSubtitle}>
+                    {stats.overview?.appwriteSizeFormatted && `☁️ ${stats.overview.appwriteSizeFormatted}`}
+                  </div>
                 </div>
-                <div className={styles.statCard}>
-                  <h3>☁️ Fichiers Appwrite</h3>
-                  <div className={styles.statNumber}>{stats.overview?.appwriteFiles || 0}</div>
-                  <div className={styles.statSubtext}>{stats.overview?.appwriteSizeFormatted || '0 Bytes'}</div>
-                </div>
-                <div className={styles.statCard}>
-                  <h3>🗂️ Stockage</h3>
-                  <div className={styles.statText}>{stats.storageProvider || 'Appwrite Cloud'}</div>
-                </div>
+                
                 {stats.filesByType && stats.filesByType.length > 0 && (
                   <div className={`${styles.statCard} ${styles.fullWidth}`}>
                     <h3>📊 Fichiers par Type</h3>
@@ -794,29 +680,39 @@ export const AdminPage = () => {
                       {stats.filesByType.map((type) => (
                         <div key={type._id} className={styles.typeStatItem}>
                           <span>{type._id}:</span>
-                          <span>{type.count} ({type.totalSizeFormatted})</span>
+                          <span>{type.count} fichiers ({type.totalSizeFormatted})</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
-                {stats.recentUploads && stats.recentUploads.length > 0 && (
+
+                {stats.filesBySemester && stats.filesBySemester.length > 0 && (
                   <div className={`${styles.statCard} ${styles.fullWidth}`}>
-                    <h3>📅 Uploads Récents</h3>
-                    <div className={styles.recentList}>
-                      {stats.recentUploads.slice(0, 5).map((file) => (
-                        <div key={file._id} className={styles.recentItem}>
-                          <span className={styles.recentName}>{file.originalName}</span>
-                          <span className={styles.recentSize}>{file.fileSizeFormatted}</span>
-                          <span className={styles.recentDate}>{formatDate(file.uploadedAt)}</span>
+                    <h3>🎓 Fichiers par Semestre</h3>
+                    <div className={styles.typeStats}>
+                      {stats.filesBySemester.map((semester) => (
+                        <div key={semester._id} className={styles.typeStatItem}>
+                          <span>{semester._id}:</span>
+                          <span>{semester.count} fichiers ({semester.totalSizeFormatted})</span>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {stats.storageProvider && (
+                  <div className={`${styles.statCard} ${styles.fullWidth}`}>
+                    <h3>☁️ Stockage</h3>
+                    <div className={styles.storageInfo}>
+                      <p><strong>Provider:</strong> {stats.storageProvider}</p>
+                      <p><strong>Location:</strong> {stats.storageLocation}</p>
                     </div>
                   </div>
                 )}
               </div>
             ) : (
-              <div className={styles.loading}>⏳ Chargement des statistiques Appwrite...</div>
+              <div className={styles.loading}>Chargement des statistiques...</div>
             )}
           </div>
         )}
@@ -825,23 +721,12 @@ export const AdminPage = () => {
         {deleteConfirm && (
           <div className={styles.modalOverlay}>
             <div className={styles.modal}>
-              <h3>⚠️ Confirmer la suppression</h3>
-              <p>Êtes-vous sûr de vouloir supprimer le fichier "<strong>{deleteConfirm.originalName}</strong>" ?</p>
-              <div className={styles.deleteWarning}>
-                <p>🗑️ Cette action supprimera définitivement :</p>
-                <ul>
-                  <li>Le fichier depuis Appwrite Cloud Storage</li>
-                  <li>Les métadonnées de la base de données</li>
-                </ul>
-                <p><strong>Cette action est irréversible!</strong></p>
-              </div>
+              <h3>Confirmer la suppression</h3>
+              <p>Êtes-vous sûr de vouloir supprimer le fichier "{deleteConfirm.originalName}" ?</p>
+              <p><strong>Cette action est irréversible!</strong></p>
               <div className={styles.modalActions}>
-                <button onClick={deleteFile} className={styles.deleteConfirmButton}>
-                  🗑️ Oui, Supprimer Définitivement
-                </button>
-                <button onClick={cancelDelete} className={styles.cancelButton}>
-                  ❌ Annuler
-                </button>
+                <button onClick={deleteFile} className={styles.deleteConfirmButton}>Oui, Supprimer</button>
+                <button onClick={cancelDelete} className={styles.cancelButton}>Annuler</button>
               </div>
             </div>
           </div>
@@ -853,7 +738,7 @@ export const AdminPage = () => {
             {message}
             <button 
               onClick={() => setMessage('')} 
-              className={styles.closeMessage}
+              className={styles.closeMessageButton}
               title="Fermer"
             >
               ×
@@ -864,3 +749,5 @@ export const AdminPage = () => {
     </div>
   );
 };
+
+export default AdminPage;
