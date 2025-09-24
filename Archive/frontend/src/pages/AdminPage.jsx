@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import styles from './AdminPage.module.css';
 
-// Fixed backend URL to include https protocol
+// Use environment variable or fallback to production URL
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'https://archive-mi73.onrender.com';
 
 export const AdminPage = () => {
@@ -26,52 +26,61 @@ export const AdminPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSemester, setFilterSemester] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('testing');
 
   const ADMIN_PASSWORD = 'admin123';
 
-  // Enhanced connection test with better error handling
+  // Enhanced connection test
   useEffect(() => {
     const testConnection = async () => {
+      setConnectionStatus('testing');
       try {
         console.log('Testing connection to:', API_BASE_URL);
         
-        // Add timeout and proper error handling
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
         
         const response = await fetch(`${API_BASE_URL}/api/health`, {
           signal: controller.signal,
           headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          }
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          mode: 'cors'
         });
         
         clearTimeout(timeoutId);
         
-        if (!response.ok) {
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Backend connection successful:', data);
+          setConnectionStatus('connected');
+          
+          if (data.status === 'Warning') {
+            setMessage(`Avertissement serveur: ${data.message}`);
+          }
+        } else {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
-        const data = await response.json();
-        console.log('Backend connection test successful:', data);
-        
-        if (data.status === 'Warning') {
-          setMessage(`Avertissement: ${data.message}. Services: ${JSON.stringify(data.services)}`);
-        }
       } catch (error) {
         console.error('Backend connection failed:', error);
+        setConnectionStatus('failed');
+        
         if (error.name === 'AbortError') {
-          setMessage('Erreur: Timeout de connexion au serveur backend');
+          setMessage('Timeout de connexion au serveur (15s)');
+        } else if (error.message.includes('CORS')) {
+          setMessage('Erreur CORS: Vérifiez la configuration serveur');
         } else {
-          setMessage(`Erreur: Impossible de se connecter au serveur backend - ${error.message}`);
+          setMessage(`Connexion échouée: ${error.message}`);
         }
       }
     };
+    
     testConnection();
   }, []);
 
-  // --- Auth ---
+  // Auth functions
   const handleLogin = (e) => {
     e.preventDefault();
     if (password === ADMIN_PASSWORD) {
@@ -100,32 +109,58 @@ export const AdminPage = () => {
     setFiles([]);
   };
 
+  // Load data on tab change
   useEffect(() => {
-    if (isAuthenticated && activeTab === 'manage') loadFiles();
-    if (isAuthenticated && activeTab === 'stats') loadStats();
-    // eslint-disable-next-line
-  }, [isAuthenticated, activeTab]);
+    if (isAuthenticated && connectionStatus === 'connected') {
+      if (activeTab === 'manage') loadFiles();
+      if (activeTab === 'stats') loadStats();
+    }
+  }, [isAuthenticated, activeTab, connectionStatus]);
 
-  // --- API ---
+  // API functions
+  const makeApiRequest = async (url, options = {}) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}${url}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          ...options.headers
+        },
+        mode: 'cors'
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch (e) {
+          // Response isn't JSON
+        }
+        throw new Error(errorMessage);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  };
+
   const loadFiles = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/admin/files`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
+      const data = await makeApiRequest('/api/admin/files');
       setFiles(data);
     } catch (error) {
       console.error('Error loading files:', error);
-      setMessage('Erreur lors du chargement des fichiers: ' + error.message);
+      setMessage('Erreur chargement fichiers: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -133,23 +168,14 @@ export const AdminPage = () => {
 
   const loadStats = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/admin/stats`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
-    } catch (error) { 
+      const data = await makeApiRequest('/api/admin/stats');
+      setStats(data);
+    } catch (error) {
       console.error('Error loading stats:', error);
     }
   };
 
-  // --- Form ---
+  // Form handlers
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -160,51 +186,39 @@ export const AdminPage = () => {
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    console.log('File selected:', file);
+    console.log('File selected:', file?.name, file?.size);
     setFormData(prev => ({
       ...prev,
       pdf: file
     }));
   };
 
-  // --- ENHANCED UPLOAD ---
+  // Upload handler
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Get the actual file from the file input element as backup
+    if (connectionStatus !== 'connected') {
+      setMessage('Serveur non disponible. Veuillez attendre la connexion.');
+      return;
+    }
+    
     const fileInput = document.getElementById('pdf-input');
     const selectedFile = formData.pdf || fileInput?.files[0];
     
-    // Debug logging
-    console.log('Form validation check:', {
-      semester: formData.semester,
-      type: formData.type,
-      subject: formData.subject,
-      year: formData.year,
-      formDataPdf: formData.pdf,
-      selectedFile: selectedFile
-    });
-
-    // Validate all fields including the file
-    if (
-      !formData.semester ||
-      !formData.type ||
-      !formData.subject.trim() ||
-      !formData.year.trim() ||
-      !selectedFile
-    ) {
+    // Validation
+    if (!formData.semester || !formData.type || !formData.subject.trim() || 
+        !formData.year.trim() || !selectedFile) {
       setMessage('Veuillez remplir tous les champs et sélectionner un fichier PDF.');
       return;
     }
 
-    // Additional file validation
-    if (selectedFile && selectedFile.type !== 'application/pdf') {
+    if (selectedFile.type !== 'application/pdf') {
       setMessage('Veuillez sélectionner un fichier PDF valide.');
       return;
     }
 
-    if (selectedFile && selectedFile.size > 50 * 1024 * 1024) { // 50MB
-      setMessage('Le fichier est trop volumineux. Taille maximum: 50MB.');
+    if (selectedFile.size > 50 * 1024 * 1024) {
+      setMessage('Fichier trop volumineux (max 50MB).');
       return;
     }
 
@@ -218,50 +232,43 @@ export const AdminPage = () => {
     uploadData.append('year', formData.year);
     uploadData.append('pdf', selectedFile);
 
-    // Debug FormData contents
-    console.log('Uploading with data:', {
+    console.log('Uploading:', {
       semester: formData.semester,
       type: formData.type,
       subject: formData.subject,
       year: formData.year,
       fileName: selectedFile.name,
-      fileSize: selectedFile.size,
-      fileType: selectedFile.type
+      fileSize: selectedFile.size
     });
 
     try {
-      // Enhanced fetch with proper error handling and timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for uploads
       
       const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
         body: uploadData,
         signal: controller.signal,
-        // Don't set Content-Type header - let browser set it with boundary for FormData
-        headers: {
-          'Accept': 'application/json'
-        }
+        mode: 'cors'
+        // Don't set Content-Type - browser will set multipart/form-data with boundary
       });
 
       clearTimeout(timeoutId);
-      console.log('Upload response status:', response.status);
       
       if (!response.ok) {
-        // Try to parse error response
-        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        let errorMessage = `HTTP ${response.status}`;
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
         } catch (e) {
-          // If response isn't JSON, use status text
+          // Response isn't JSON
         }
         throw new Error(errorMessage);
       }
       
-      const responseData = await response.json();
-      console.log('Upload response data:', responseData);
-
+      const result = await response.json();
+      console.log('Upload successful:', result);
+      
       setMessage('Fichier uploadé avec succès!');
       
       // Reset form
@@ -273,11 +280,10 @@ export const AdminPage = () => {
         pdf: null
       });
       
-      // Clear file input
-      const fileInput = document.getElementById('pdf-input');
-      if (fileInput) fileInput.value = '';
+      const fileInputElement = document.getElementById('pdf-input');
+      if (fileInputElement) fileInputElement.value = '';
       
-      // Refresh lists if on those tabs
+      // Refresh data
       if (activeTab === 'manage') loadFiles();
       if (activeTab === 'stats') loadStats();
       
@@ -285,18 +291,16 @@ export const AdminPage = () => {
       console.error('Upload error:', error);
       
       if (error.name === 'AbortError') {
-        setMessage('Erreur: Timeout lors de l\'upload (30s). Veuillez réessayer.');
-      } else if (error.message.includes('CORS')) {
-        setMessage('Erreur CORS: Problème de configuration serveur. Contactez l\'administrateur.');
+        setMessage('Upload timeout (60s). Veuillez réessayer avec un fichier plus petit.');
       } else {
-        setMessage('Erreur lors de l\'upload: ' + error.message);
+        setMessage('Erreur upload: ' + error.message);
       }
     } finally {
       setUploading(false);
     }
   };
 
-  // --- EDIT ---
+  // Edit handlers
   const startEditing = (file) => {
     setEditingFile({
       ...file,
@@ -314,12 +318,9 @@ export const AdminPage = () => {
     if (!editingFile) return;
     
     try {
-      const response = await fetch(`${API_BASE_URL}/api/files/${editingFile._id}`, {
+      await makeApiRequest(`/api/files/${editingFile._id}`, {
         method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           originalName: editingFile.originalName,
           semester: editingFile.semester,
@@ -329,50 +330,36 @@ export const AdminPage = () => {
         })
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
       setMessage('Fichier mis à jour avec succès!');
       setEditingFile(null);
       loadFiles();
     } catch (error) {
-      console.error('Edit error:', error);
-      setMessage('Erreur lors de la mise à jour: ' + error.message);
+      setMessage('Erreur mise à jour: ' + error.message);
     }
   };
 
-  // --- DELETE ---
+  // Delete handlers
   const confirmDelete = (file) => setDeleteConfirm(file);
   const cancelDelete = () => setDeleteConfirm(null);
 
   const deleteFile = async () => {
     if (!deleteConfirm) return;
+    
     try {
-      const response = await fetch(`${API_BASE_URL}/api/files/${deleteConfirm._id}`, {
-        method: 'DELETE',
-        headers: {
-          'Accept': 'application/json'
-        }
+      await makeApiRequest(`/api/files/${deleteConfirm._id}`, {
+        method: 'DELETE'
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
       setMessage('Fichier supprimé avec succès!');
       setDeleteConfirm(null);
       loadFiles();
       if (activeTab === 'stats') loadStats();
     } catch (error) {
-      console.error('Delete error:', error);
-      setMessage('Erreur lors de la suppression: ' + error.message);
+      setMessage('Erreur suppression: ' + error.message);
     }
   };
 
-  // --- FILTERS ---
+  // Filter files
   const filteredFiles = files.filter(file => {
     const matchesSearch = file.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (file.subject?.name && file.subject.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -387,7 +374,7 @@ export const AdminPage = () => {
     return matchesSearch && matchesSemester && matchesType;
   });
 
-  // --- UTILS ---
+  // Utility functions
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -400,14 +387,31 @@ export const AdminPage = () => {
     if (e.key === 'Enter') handleLogin(e);
   };
 
-  // Get display name for semester/type
-  const getDisplayName = (item, field) => {
+  const getDisplayName = (item) => {
     if (!item) return '';
     if (typeof item === 'string') return item;
     return item.displayName || item.name || item;
   };
 
-  // --- RENDER ---
+  const getConnectionStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected': return '#28a745';
+      case 'failed': return '#dc3545';
+      case 'testing': return '#ffc107';
+      default: return '#6c757d';
+    }
+  };
+
+  const getConnectionStatusText = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'Connecté';
+      case 'failed': return 'Échec connexion';
+      case 'testing': return 'Test connexion...';
+      default: return 'Inconnu';
+    }
+  };
+
+  // Login page
   if (!isAuthenticated) {
     return (
       <div className={styles.loginPage}>
@@ -425,6 +429,14 @@ export const AdminPage = () => {
               Entrez votre mot de passe pour accéder au panneau d'administration
             </p>
           </div>
+          <div className={styles.connectionStatus} style={{ 
+            color: getConnectionStatusColor(), 
+            marginBottom: '1rem',
+            fontSize: '0.9rem',
+            fontWeight: '500'
+          }}>
+            Statut serveur: {getConnectionStatusText()}
+          </div>
           <div className={styles.loginInputContainer}>
             <input
               type="password"
@@ -435,10 +447,16 @@ export const AdminPage = () => {
               className={styles.loginInput}
               autoFocus
               required
+              disabled={connectionStatus !== 'connected'}
             />
           </div>
-          <button onClick={handleLogin} className={styles.loginButton} type="button">
-            Se connecter
+          <button 
+            onClick={handleLogin} 
+            className={styles.loginButton} 
+            type="button"
+            disabled={connectionStatus !== 'connected'}
+          >
+            {connectionStatus === 'connected' ? 'Se connecter' : 'Serveur non disponible'}
           </button>
           {authError && (
             <div className={styles.loginError}>{authError}</div>
@@ -450,6 +468,7 @@ export const AdminPage = () => {
     );
   }
 
+  // Main admin interface
   return (
     <div className={styles.adminPage}>
       <div className={styles.adminContainer}>
@@ -457,9 +476,18 @@ export const AdminPage = () => {
           <h1 className={`${styles.adminTitle} ${styles.h1}`}>
             Administration - Gestion des Fichiers
           </h1>
-          <button onClick={handleLogout} className={styles.logoutButton} type="button">
-            Déconnexion
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{ 
+              color: getConnectionStatusColor(), 
+              fontSize: '0.9rem',
+              fontWeight: '500'
+            }}>
+              {getConnectionStatusText()}
+            </div>
+            <button onClick={handleLogout} className={styles.logoutButton} type="button">
+              Déconnexion
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
@@ -467,84 +495,127 @@ export const AdminPage = () => {
           <button
             className={`${styles.tabButton} ${activeTab === 'upload' ? styles.active : ''}`}
             onClick={() => setActiveTab('upload')}
-          >Upload</button>
+          >
+            Upload
+          </button>
           <button
             className={`${styles.tabButton} ${activeTab === 'manage' ? styles.active : ''}`}
             onClick={() => setActiveTab('manage')}
-          >Gérer les Fichiers</button>
+            disabled={connectionStatus !== 'connected'}
+          >
+            Gérer les Fichiers
+          </button>
           <button
             className={`${styles.tabButton} ${activeTab === 'stats' ? styles.active : ''}`}
             onClick={() => setActiveTab('stats')}
-          >Statistiques</button>
+            disabled={connectionStatus !== 'connected'}
+          >
+            Statistiques
+          </button>
         </div>
 
         {/* Upload Tab */}
         {activeTab === 'upload' && (
-          <form onSubmit={handleSubmit} className={styles.uploadForm}>
-            <div className={styles.formGroup}>
-              <label htmlFor="semester">Semestre</label>
-              <select id="semester" name="semester" value={formData.semester} onChange={handleInputChange} required>
-                <option value="S1">Semestre 1</option>
-                <option value="S2">Semestre 2</option>
-                <option value="S3">Semestre 3</option>
-                <option value="S4">Semestre 4</option>
-                <option value="S5">Semestre 5</option>
-              </select>
-            </div>
-            <div className={styles.formGroup}>
-              <label htmlFor="type">Type</label>
-              <select id="type" name="type" value={formData.type} onChange={handleInputChange} required>
-                <option value="cours">Cours</option>
-                <option value="tp">Travaux Pratiques</option>
-                <option value="td">Travaux Dirigés</option>
-                <option value="devoirs">Devoirs</option>
-                <option value="compositions">Compositions</option>
-                <option value="ratrapages">Rattrapages</option>
-              </select>
-            </div>
-            <div className={styles.formGroup}>
-              <label htmlFor="subject">Matière</label>
-              <input
-                id="subject"
-                name="subject"
-                type="text"
-                value={formData.subject}
-                onChange={handleInputChange}
-                placeholder="Ex: Mathématiques, Physique..."
-                required
-              />
-            </div>
-            <div className={styles.formGroup}>
-              <label htmlFor="year">Année</label>
-              <input
-                id="year"
-                name="year"
-                type="text"
-                value={formData.year}
-                onChange={handleInputChange}
-                placeholder="Ex: 2024, 2023-2024"
-                required
-              />
-            </div>
-            <div className={`${styles.formGroup} ${styles.fullWidth}`}>
-              <label htmlFor="pdf-input">Fichier PDF</label>
-              <input
-                id="pdf-input"
-                type="file"
-                accept=".pdf"
-                onChange={handleFileChange}
-                required
-              />
-              {formData.pdf && (
-                <div className={styles.fileInfo}>
-                  Fichier sélectionné: {formData.pdf.name} ({formatFileSize(formData.pdf.size)})
-                </div>
-              )}
-            </div>
-            <button type="submit" disabled={uploading} className={styles.submitButton}>
-              {uploading ? 'Upload en cours...' : 'Uploader le fichier'}
-            </button>
-          </form>
+          <div>
+            {connectionStatus !== 'connected' && (
+              <div className={styles.warningMessage} style={{ 
+                background: '#fff3cd', 
+                border: '1px solid #ffeaa7', 
+                color: '#856404',
+                padding: '1rem',
+                borderRadius: '0.375rem',
+                marginBottom: '1rem'
+              }}>
+                Serveur non disponible. L'upload est désactivé.
+              </div>
+            )}
+            <form onSubmit={handleSubmit} className={styles.uploadForm}>
+              <div className={styles.formGroup}>
+                <label htmlFor="semester">Semestre</label>
+                <select 
+                  id="semester" 
+                  name="semester" 
+                  value={formData.semester} 
+                  onChange={handleInputChange} 
+                  required
+                  disabled={uploading || connectionStatus !== 'connected'}
+                >
+                  <option value="S1">Semestre 1</option>
+                  <option value="S2">Semestre 2</option>
+                  <option value="S3">Semestre 3</option>
+                  <option value="S4">Semestre 4</option>
+                  <option value="S5">Semestre 5</option>
+                </select>
+              </div>
+              <div className={styles.formGroup}>
+                <label htmlFor="type">Type</label>
+                <select 
+                  id="type" 
+                  name="type" 
+                  value={formData.type} 
+                  onChange={handleInputChange} 
+                  required
+                  disabled={uploading || connectionStatus !== 'connected'}
+                >
+                  <option value="cours">Cours</option>
+                  <option value="tp">Travaux Pratiques</option>
+                  <option value="td">Travaux Dirigés</option>
+                  <option value="devoirs">Devoirs</option>
+                  <option value="compositions">Compositions</option>
+                  <option value="ratrapages">Rattrapages</option>
+                </select>
+              </div>
+              <div className={styles.formGroup}>
+                <label htmlFor="subject">Matière</label>
+                <input
+                  id="subject"
+                  name="subject"
+                  type="text"
+                  value={formData.subject}
+                  onChange={handleInputChange}
+                  placeholder="Ex: Mathématiques, Physique..."
+                  required
+                  disabled={uploading || connectionStatus !== 'connected'}
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <label htmlFor="year">Année</label>
+                <input
+                  id="year"
+                  name="year"
+                  type="text"
+                  value={formData.year}
+                  onChange={handleInputChange}
+                  placeholder="Ex: 2024, 2023-2024"
+                  required
+                  disabled={uploading || connectionStatus !== 'connected'}
+                />
+              </div>
+              <div className={`${styles.formGroup} ${styles.fullWidth}`}>
+                <label htmlFor="pdf-input">Fichier PDF</label>
+                <input
+                  id="pdf-input"
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileChange}
+                  required
+                  disabled={uploading || connectionStatus !== 'connected'}
+                />
+                {formData.pdf && (
+                  <div className={styles.fileInfo}>
+                    Fichier sélectionné: {formData.pdf.name} ({formatFileSize(formData.pdf.size)})
+                  </div>
+                )}
+              </div>
+              <button 
+                type="submit" 
+                disabled={uploading || connectionStatus !== 'connected'} 
+                className={styles.submitButton}
+              >
+                {uploading ? 'Upload en cours...' : 'Uploader le fichier'}
+              </button>
+            </form>
+          </div>
         )}
 
         {/* Manage Files Tab */}
@@ -580,7 +651,7 @@ export const AdminPage = () => {
                 </select>
               </div>
               <button onClick={loadFiles} className={styles.refreshButton} disabled={loading}>
-                Actualiser
+                {loading ? 'Chargement...' : 'Actualiser'}
               </button>
             </div>
 
@@ -696,7 +767,7 @@ export const AdminPage = () => {
                           <td>{formatFileSize(file.fileSize)}</td>
                           <td>
                             <span className={styles.storageBadge}>
-                              {file.storageProvider === 'appwrite' ? 'Appwrite' : 'Local'}
+                              {file.storageProvider === 'local' ? 'Local' : file.storageProvider}
                             </span>
                           </td>
                           <td className={styles.actions}>
@@ -737,9 +808,6 @@ export const AdminPage = () => {
                 <div className={styles.statCard}>
                   <h3>Total Fichiers</h3>
                   <div className={styles.statNumber}>{stats.overview?.totalFiles || 0}</div>
-                  <div className={styles.statSubtitle}>
-                    {stats.overview?.appwriteFiles && `${stats.overview.appwriteFiles} dans Appwrite`}
-                  </div>
                 </div>
                 <div className={styles.statCard}>
                   <h3>Semestres</h3>
@@ -752,9 +820,6 @@ export const AdminPage = () => {
                 <div className={styles.statCard}>
                   <h3>Taille Totale</h3>
                   <div className={styles.statNumber}>{stats.overview?.totalSizeFormatted || '0 Bytes'}</div>
-                  <div className={styles.statSubtitle}>
-                    {stats.overview?.appwriteSizeFormatted && `${stats.overview.appwriteSizeFormatted}`}
-                  </div>
                 </div>
                 
                 {stats.filesByType && stats.filesByType.length > 0 && (

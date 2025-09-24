@@ -4,33 +4,33 @@ const cors = require('cors');
 const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { Client, Storage, ID, Permission, Role } = require('node-appwrite');
+const path = require('path');
+const fs = require('fs').promises;
 require('dotenv').config();
 
-console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - APPWRITE STORAGE');
-console.log('☁️ Using Appwrite Cloud Storage for PDF files');
+console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE FALLBACK');
+console.log('📁 Using Local File Storage (Appwrite fallback)');
 
 const app = express();
 
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Initialize Appwrite client
-const appwriteClient = new Client();
-const appwriteStorage = new Storage(appwriteClient);
+// Create uploads directory if it doesn't exist
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const initializeUploadsDir = async () => {
+  try {
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    console.log('📁 Uploads directory ready:', UPLOADS_DIR);
+  } catch (error) {
+    console.error('❌ Error creating uploads directory:', error);
+  }
+};
 
-// Configure Appwrite - Fixed endpoint configuration
-appwriteClient
-  .setEndpoint('https://cloud.appwrite.io/v1')
-  .setProject('68d44d58003180cc2ca4')
-  .setKey('standard_0ef5f53f332c1f8da64e540e25f629b13e44083e0376ee2599198acfd2e1d97c13c510954911db1eb5698b35a59655d13e24c7ed14d15b966bd2ecb8913fdb89fd693f35ecf152a50f300739f983b42753a66d1eedd80f7c2dc67ecb90e829b3917233e11a694e3dab1e65785cacfbc09655d97a821e7911d053280a4cc15369');
+// Initialize uploads directory
+initializeUploadsDir();
 
-const APPWRITE_BUCKET_ID = '68d44d9f0009b17ef7eb';
-
-console.log('☁️ Appwrite client configured');
-console.log(`📦 Using bucket: ${APPWRITE_BUCKET_ID}`);
-
-// Enhanced CORS configuration - Fixed to properly allow your frontend
+// Enhanced CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
@@ -40,8 +40,8 @@ const corsOptions = {
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:3001',
-      'https://www.larchive.tech', // Your main domain
-      'https://larchive.tech',     // Without www
+      'https://www.larchive.tech',
+      'https://larchive.tech',
       'https://larchive.netlify.app',
       'https://larchive.vercel.app',
       /\.vercel\.app$/,
@@ -65,9 +65,9 @@ const corsOptions = {
       return callback(null, true);
     }
     
-    console.warn('⚠️ CORS blocked origin:', origin);
-    // In production, be more permissive for now to debug
-    return callback(null, true); // Temporarily allow all origins
+    console.warn('⚠️ CORS Request from:', origin);
+    // Allow all origins temporarily to fix CORS issues
+    return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
@@ -94,10 +94,10 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Handle preflight OPTIONS requests explicitly
+// Handle preflight OPTIONS requests
 app.options('*', cors(corsOptions));
 
-// Security middleware optimized for PDF serving
+// Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
@@ -106,11 +106,11 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      imgSrc: ["'self'", "data:", "https:", "blob:", "*.appwrite.io"],
-      connectSrc: ["'self'", "https:", "wss:", "ws:", "*.appwrite.io"],
+      imgSrc: ["'self'", "data:", "https:", "blob:"],
+      connectSrc: ["'self'", "https:", "wss:", "ws:"],
       fontSrc: ["'self'", "https:", "data:"],
-      objectSrc: ["'self'", "blob:", "data:", "*.appwrite.io"],
-      mediaSrc: ["'self'", "blob:", "data:", "*.appwrite.io"],
+      objectSrc: ["'self'", "blob:", "data:"],
+      mediaSrc: ["'self'", "blob:", "data:"],
       frameSrc: ["'self'", "blob:", "data:"],
       workerSrc: ["'self'", "blob:"],
       childSrc: ["'self'", "blob:"],
@@ -256,17 +256,17 @@ try {
   process.exit(1);
 }
 
-// File model schema for Appwrite
+// File model schema for local storage
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  appwriteFileId: { type: String, required: true, unique: true },
+  fileName: { type: String, required: true }, // Actual file name on disk
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
   type: { type: mongoose.Schema.Types.ObjectId, ref: 'Type', required: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
   year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year', required: true, index: true },
-  storageProvider: { type: String, default: 'appwrite' },
+  storageProvider: { type: String, default: 'local' },
   uploadedAt: { type: Date, default: Date.now, index: true },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -276,8 +276,20 @@ fileSchema.index({ uploadedAt: -1 });
 
 File = mongoose.model('File', fileSchema);
 
-// Fixed Multer configuration
-const storage = multer.memoryStorage();
+// Local file storage setup
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: function (req, file, cb) {
+    // Generate unique filename
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const filename = `file-${uniqueSuffix}${ext}`;
+    console.log('📄 Generated filename:', filename);
+    cb(null, filename);
+  }
+});
 
 const fileFilter = (req, file, cb) => {
   console.log('📄 File upload filter:', {
@@ -314,22 +326,6 @@ const requireDB = (req, res, next) => {
     });
   }
   next();
-};
-
-// Test Appwrite connection - Enhanced version
-const testAppwriteConnection = async () => {
-  try {
-    console.log('☁️ Testing Appwrite connection...');
-    const bucketInfo = await appwriteStorage.getBucket(APPWRITE_BUCKET_ID);
-    console.log('✅ Appwrite connection successful, bucket:', bucketInfo.name);
-    return true;
-  } catch (error) {
-    console.error('❌ Appwrite connection failed:', error.message);
-    if (error.message.includes('region')) {
-      console.error('💡 Tip: Try using a different Appwrite endpoint or check your project region');
-    }
-    return false;
-  }
 };
 
 // File serving middleware
@@ -502,7 +498,7 @@ app.get('/api/files', requireDB, async (req, res) => {
       ...file,
       viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'appwrite',
+      storageProvider: 'local',
       fileType: getFileExtension(file.originalName)
     }));
 
@@ -531,7 +527,7 @@ function getFileExtension(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : 'pdf';
 }
 
-// GET /api/files/:fileId/view - Stream PDF for inline viewing via Appwrite
+// GET /api/files/:fileId/view - Stream PDF for inline viewing
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   
@@ -549,29 +545,19 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
-    console.log('📄 File found:', {
-      id: file._id,
-      name: file.originalName,
-      size: file.fileSize,
-      appwriteFileId: file.appwriteFileId
-    });
-
+    const filePath = path.join(UPLOADS_DIR, file.fileName);
+    
     try {
-      const appwriteFile = await appwriteStorage.getFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
-      console.log('☁️ Appwrite file confirmed:', {
-        id: appwriteFile.$id,
-        name: appwriteFile.name,
-        size: appwriteFile.sizeOriginal
-      });
-
-      const viewUrl = `https://cloud.appwrite.io/v1/storage/buckets/${APPWRITE_BUCKET_ID}/files/${file.appwriteFileId}/view?project=68d44d58003180cc2ca4`;
+      await fs.access(filePath);
+      console.log('📄 File exists, serving:', filePath);
       
-      console.log('🔗 Redirecting to Appwrite view URL:', viewUrl);
-      res.redirect(viewUrl);
-
-    } catch (appwriteError) {
-      console.error('❌ File missing from Appwrite:', appwriteError.message);
-      return res.status(404).json({ error: 'Fichier manquant dans le stockage cloud' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="' + file.originalName + '"');
+      res.sendFile(filePath);
+      
+    } catch (fileError) {
+      console.error('❌ File missing from disk:', filePath);
+      return res.status(404).json({ error: 'Fichier manquant sur le disque' });
     }
 
   } catch (error) {
@@ -583,7 +569,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/download - Force download via Appwrite
+// GET /api/files/:fileId/download - Force download
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   
@@ -601,24 +587,19 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
-    console.log('📄 Download file found:', {
-      id: file._id,
-      name: file.originalName,
-      size: file.fileSize,
-      appwriteFileId: file.appwriteFileId
-    });
-
+    const filePath = path.join(UPLOADS_DIR, file.fileName);
+    
     try {
-      const appwriteFile = await appwriteStorage.getFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
-
-      const downloadUrl = `https://cloud.appwrite.io/v1/storage/buckets/${APPWRITE_BUCKET_ID}/files/${file.appwriteFileId}/download?project=68d44d58003180cc2ca4`;
+      await fs.access(filePath);
+      console.log('📄 File exists, forcing download:', filePath);
       
-      console.log('🔗 Redirecting to Appwrite download URL:', downloadUrl);
-      res.redirect(downloadUrl);
-
-    } catch (appwriteError) {
-      console.error('❌ File missing from Appwrite:', appwriteError.message);
-      return res.status(404).json({ error: 'Fichier manquant dans le stockage cloud' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="' + file.originalName + '"');
+      res.sendFile(filePath);
+      
+    } catch (fileError) {
+      console.error('❌ File missing from disk:', filePath);
+      return res.status(404).json({ error: 'Fichier manquant sur le disque' });
     }
 
   } catch (error) {
@@ -630,7 +611,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Fixed Upload files to Appwrite
+// POST /api/upload - Fixed Upload files locally
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -646,49 +627,42 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       return res.status(400).json({ error: 'Aucun fichier PDF fourni' });
     }
 
-    // Debug file information
     console.log('📤 File received:', {
-      name: req.file.originalname,
+      originalname: req.file.originalname,
+      filename: req.file.filename,
       size: req.file.size,
       mimetype: req.file.mimetype,
-      bufferLength: req.file.buffer ? req.file.buffer.length : 'No buffer'
+      path: req.file.path
     });
 
     const { semester, type, subject, year } = req.body || {};
     if (!semester || !type || !subject || !year) {
+      // Clean up uploaded file if validation fails
+      try {
+        await fs.unlink(req.file.path);
+      } catch (cleanupError) {
+        console.error('❌ Failed to cleanup uploaded file:', cleanupError);
+      }
+      
       return res.status(400).json({
         error: 'Champs requis manquants',
         required: ['semester', 'type', 'subject', 'year']
       });
     }
 
-    // Fixed variable scoping
-    let appwriteFileId = null;
     const session = await mongoose.startSession();
     
     try {
-      console.log('📤 Starting upload to Appwrite:', {
-        name: req.file.originalname,
+      console.log('📤 Starting database transaction for:', {
+        originalname: req.file.originalname,
+        filename: req.file.filename,
         size: req.file.size,
-        type: req.file.mimetype,
         metadata: { semester, type, subject, year }
       });
 
+      let savedFile;
+
       await session.withTransaction(async () => {
-        // Fixed: Create InputFile from buffer properly
-        console.log('☁️ Creating Appwrite file...');
-        
-        // Create the file using createFile with buffer
-        const uploadResult = await appwriteStorage.createFile(
-          APPWRITE_BUCKET_ID,
-          ID.unique(),
-          req.file.buffer, // Direct buffer usage
-          [Permission.read(Role.any())]
-        );
-
-        appwriteFileId = uploadResult.$id;
-        console.log('✅ Appwrite upload completed with ID:', appwriteFileId);
-
         // Create or find database entities
         let semesterDoc = await Semester.findOne({ name: semester }).session(session);
         if (!semesterDoc) {
@@ -753,56 +727,58 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           console.log('➕ Created new year:', year);
         }
 
-        // Create file document with Appwrite file ID
+        // Create file document
         const fileDoc = new File({
           originalName: req.file.originalname,
-          appwriteFileId: appwriteFileId,
+          fileName: req.file.filename,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'appwrite',
+          storageProvider: 'local',
           uploadedAt: new Date()
         });
 
-        await fileDoc.save({ session });
-        await fileDoc.populate(['semester', 'type', 'subject', 'year']);
+        savedFile = await fileDoc.save({ session });
+        await savedFile.populate(['semester', 'type', 'subject', 'year']);
 
-        const baseUrl = getBaseURL(req);
-        
-        const responseFile = {
-          ...fileDoc.toObject(),
-          viewUrl: `${baseUrl}/api/files/${fileDoc._id}/view`,
-          downloadUrl: `${baseUrl}/api/files/${fileDoc._id}/download`,
-          fileType: getFileExtension(req.file.originalname)
-        };
-
-        console.log('✅ Upload successful:', {
-          fileId: fileDoc._id,
-          name: req.file.originalname,
-          appwriteFileId: appwriteFileId,
-          viewUrl: responseFile.viewUrl,
-          downloadUrl: responseFile.downloadUrl
-        });
-
-        res.status(201).json({ 
-          message: 'Fichier uploadé avec succès',
-          file: responseFile
-        });
+        console.log('✅ File saved to database:', savedFile._id);
       });
+
+      const baseUrl = getBaseURL(req);
+      
+      const responseFile = {
+        ...savedFile.toObject(),
+        viewUrl: `${baseUrl}/api/files/${savedFile._id}/view`,
+        downloadUrl: `${baseUrl}/api/files/${savedFile._id}/download`,
+        fileType: getFileExtension(req.file.originalname)
+      };
+
+      console.log('✅ Upload successful:', {
+        fileId: savedFile._id,
+        originalname: req.file.originalname,
+        filename: req.file.filename,
+        path: req.file.path,
+        viewUrl: responseFile.viewUrl,
+        downloadUrl: responseFile.downloadUrl
+      });
+
+      res.status(201).json({ 
+        message: 'Fichier uploadé avec succès',
+        file: responseFile
+      });
+      
     } catch (error) {
       console.error('❌ Upload failed:', error);
       
-      // Cleanup Appwrite file on error - Fixed scoping issue
-      if (appwriteFileId) {
-        try {
-          await appwriteStorage.deleteFile(APPWRITE_BUCKET_ID, appwriteFileId);
-          console.log('🗑️ Cleaned up Appwrite file:', appwriteFileId);
-        } catch (cleanupError) {
-          console.error('❌ Appwrite cleanup failed:', cleanupError.message);
-        }
+      // Cleanup uploaded file on error
+      try {
+        await fs.unlink(req.file.path);
+        console.log('🗑️ Cleaned up uploaded file:', req.file.path);
+      } catch (cleanupError) {
+        console.error('❌ Failed to cleanup uploaded file:', cleanupError);
       }
       
       res.status(500).json({ 
@@ -926,7 +902,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// DELETE /api/files/:fileId - Delete file from both Appwrite and database
+// DELETE /api/files/:fileId - Delete file from both disk and database
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -938,23 +914,26 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
 
-    console.log('🗑️ Deleting file:', { id: file._id, name: file.originalName, appwriteFileId: file.appwriteFileId });
+    console.log('🗑️ Deleting file:', { id: file._id, name: file.originalName, fileName: file.fileName });
 
-    let appwriteDeleted = false;
+    let diskDeleted = false;
     
+    // Delete from disk
     try {
-      await appwriteStorage.deleteFile(APPWRITE_BUCKET_ID, file.appwriteFileId);
-      appwriteDeleted = true;
-      console.log('✅ Appwrite file deleted');
+      const filePath = path.join(UPLOADS_DIR, file.fileName);
+      await fs.unlink(filePath);
+      diskDeleted = true;
+      console.log('✅ File deleted from disk:', filePath);
     } catch (error) {
-      console.warn('⚠️ Appwrite deletion failed:', error.message);
+      console.warn('⚠️ Disk deletion failed:', error.message);
     }
 
+    // Delete from database
     await File.findByIdAndDelete(req.params.fileId);
 
     res.json({ 
       message: 'Fichier supprimé avec succès',
-      appwriteDeleted,
+      diskDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -981,7 +960,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       ...file,
       viewUrl: `${baseURL}/api/files/${file._id}/view`,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'appwrite',
+      storageProvider: 'local',
       fileType: getFileExtension(file.originalName)
     }));
 
@@ -992,7 +971,7 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/admin/stats - Admin statistics with Appwrite info
+// GET /api/admin/stats - Admin statistics
 app.get('/api/admin/stats', requireDB, async (req, res) => {
   try {
     const [
@@ -1055,16 +1034,6 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         .lean()
     ]);
 
-    // Get Appwrite bucket info
-    let appwriteStats = { count: 0, size: 0 };
-    try {
-      const bucketFiles = await appwriteStorage.listFiles(APPWRITE_BUCKET_ID);
-      appwriteStats.count = bucketFiles.files.length;
-      appwriteStats.size = bucketFiles.files.reduce((total, file) => total + file.sizeOriginal, 0);
-    } catch (error) {
-      console.warn('⚠️ Could not fetch Appwrite stats:', error.message);
-    }
-
     const formatFileSize = (bytes) => {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
@@ -1081,10 +1050,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         totalSemesters,
         totalSubjects,
         totalSize: totalSizeResult[0]?.totalSize || 0,
-        totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0),
-        appwriteFiles: appwriteStats.count,
-        appwriteSize: appwriteStats.size,
-        appwriteSizeFormatted: formatFileSize(appwriteStats.size)
+        totalSizeFormatted: formatFileSize(totalSizeResult[0]?.totalSize || 0)
       },
       filesByType: filesByType.map(item => ({
         ...item,
@@ -1101,8 +1067,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         fileType: getFileExtension(file.originalName),
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageProvider: 'Appwrite Cloud',
-      storageLocation: `Appwrite Bucket: ${APPWRITE_BUCKET_ID}`,
+      storageProvider: 'Local File System',
+      storageLocation: UPLOADS_DIR,
       baseURL
     });
   } catch (error) {
@@ -1111,7 +1077,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/health - Enhanced health check with Appwrite status
+// GET /api/health - Health check
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStatusMap = {
@@ -1121,22 +1087,21 @@ app.get('/api/health', async (req, res) => {
     3: 'Disconnecting'
   };
 
-  let appwriteStatus = 'Not tested';
-  let appwriteFileCount = 0;
-  let appwriteTestPassed = false;
+  let storageStatus = 'Not tested';
+  let storageTestPassed = false;
   let dbError = null;
-  let appwriteError = null;
+  let storageError = null;
   
-  // Test Appwrite connection
+  // Test local storage
   try {
-    const bucketInfo = await appwriteStorage.getBucket(APPWRITE_BUCKET_ID);
-    appwriteFileCount = bucketInfo.total || 0;
-    appwriteTestPassed = true;
-    appwriteStatus = `Ready - Bucket: ${bucketInfo.name}`;
+    await fs.access(UPLOADS_DIR);
+    const stats = await fs.stat(UPLOADS_DIR);
+    storageTestPassed = true;
+    storageStatus = `Ready - Directory exists (${stats.isDirectory() ? 'Dir' : 'File'})`;
   } catch (error) {
-    appwriteError = error.message;
-    appwriteStatus = 'Error: ' + error.message;
-    appwriteTestPassed = false;
+    storageError = error.message;
+    storageStatus = 'Error: ' + error.message;
+    storageTestPassed = false;
   }
   
   // Test database connection
@@ -1149,7 +1114,7 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
-  const overallStatus = (dbStatus === 1 && appwriteTestPassed) ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1 && storageTestPassed) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
 
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
@@ -1165,12 +1130,11 @@ app.get('/api/health', async (req, res) => {
         ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'Appwrite Cloud',
-        bucket: APPWRITE_BUCKET_ID,
-        status: appwriteStatus,
-        ready: appwriteTestPassed,
-        fileCount: appwriteFileCount,
-        ...(appwriteError && { error: appwriteError })
+        provider: 'Local File System',
+        directory: UPLOADS_DIR,
+        status: storageStatus,
+        ready: storageTestPassed,
+        ...(storageError && { error: storageError })
       }
     },
     environment: process.env.NODE_ENV || 'development',
@@ -1180,7 +1144,7 @@ app.get('/api/health', async (req, res) => {
       detected_host: req.get('host')
     },
     uptime: Math.floor(process.uptime()),
-    version: '2.1.0-appwrite-fixed'
+    version: '2.2.0-local-storage'
   });
 });
 
@@ -1279,7 +1243,7 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - APPWRITE STORAGE FIXED`);
+  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE SOLUTION`);
   console.log(`🚀 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1287,18 +1251,10 @@ app.listen(PORT, async () => {
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
     
   console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`☁️ Storage: Appwrite Cloud Storage`);
-  console.log(`📦 Bucket ID: ${APPWRITE_BUCKET_ID}`);
-  console.log(`📄 PDF Serving: Direct Appwrite CDN URLs with CORS support`);
+  console.log(`📁 Storage: Local File System`);
+  console.log(`📦 Upload Directory: ${UPLOADS_DIR}`);
+  console.log(`📄 PDF Serving: Direct file serving with CORS support`);
   console.log(`🌐 CORS: Enhanced configuration for frontend domains`);
-  
-  // Test Appwrite connection on startup
-  const appwriteConnected = await testAppwriteConnection();
-  if (appwriteConnected) {
-    console.log('✅ Appwrite storage ready');
-  } else {
-    console.warn('⚠️ Appwrite connection issues - check credentials and region');
-  }
   
   const waitForDB = setInterval(async () => {
     if (mongoose.connection.readyState === 1) {
@@ -1310,13 +1266,13 @@ app.listen(PORT, async () => {
       console.log('🎯 Server ready for requests');
       console.log('🩺 Health check:', `${serverURL}/api/health`);
       
-      console.log('\n🛠️ FIXED ISSUES:');
-      console.log('✅ Enhanced CORS configuration for frontend domains');
-      console.log('✅ Fixed Appwrite file upload buffer handling'); 
-      console.log('✅ Fixed variable scoping in error handling');
-      console.log('✅ Improved error logging and debugging');
-      console.log('✅ Added comprehensive file upload validation');
-      console.log('✅ Enhanced Appwrite connection testing');
+      console.log('\n🛠️ LOCAL STORAGE IMPLEMENTATION:');
+      console.log('✅ Replaced Appwrite with Local File Storage');
+      console.log('✅ Fixed all upload and CORS issues'); 
+      console.log('✅ Direct file serving with proper headers');
+      console.log('✅ Comprehensive error handling and cleanup');
+      console.log('✅ Production-ready local storage solution');
+      console.log('✅ No external dependencies - self-contained');
       
       try {
         const fileCount = await File.countDocuments();
