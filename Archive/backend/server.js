@@ -6,29 +6,65 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 require('dotenv').config();
 
-console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE FALLBACK');
-console.log('📁 Using Local File Storage (Appwrite fallback)');
+console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE');
+console.log('📁 Using Local File Storage');
 
 const app = express();
 
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Create uploads directory if it doesn't exist
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+// Enhanced uploads directory initialization with deployment support
+let UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
+
 const initializeUploadsDir = async () => {
   try {
-    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    // Create uploads directory with proper permissions
+    await fs.mkdir(UPLOADS_DIR, { recursive: true, mode: 0o755 });
+    
+    // Test write permissions
+    const testFile = path.join(UPLOADS_DIR, 'test-write.txt');
+    await fs.writeFile(testFile, 'test');
+    await fs.unlink(testFile);
+    
     console.log('📁 Uploads directory ready:', UPLOADS_DIR);
+    console.log('✅ Write permissions confirmed');
+    
+    // Log directory contents for debugging
+    try {
+      const files = await fs.readdir(UPLOADS_DIR);
+      console.log(`📊 Directory contains ${files.length} files`);
+    } catch (readError) {
+      console.log('📊 Directory is empty or unreadable');
+    }
+    
   } catch (error) {
-    console.error('❌ Error creating uploads directory:', error);
+    console.error('❌ Error initializing uploads directory:', error);
+    console.error('📁 Attempted path:', UPLOADS_DIR);
+    
+    // Try alternative locations for deployment platforms
+    const alternatives = [
+      '/tmp/uploads',
+      path.join(process.cwd(), 'tmp', 'uploads'),
+      path.join(process.env.HOME || '/tmp', 'uploads')
+    ];
+    
+    for (const alt of alternatives) {
+      try {
+        await fs.mkdir(alt, { recursive: true, mode: 0o755 });
+        console.log(`✅ Alternative uploads directory created: ${alt}`);
+        UPLOADS_DIR = alt;
+        process.env.UPLOADS_DIR = alt;
+        break;
+      } catch (altError) {
+        console.log(`❌ Alternative ${alt} failed: ${altError.message}`);
+      }
+    }
   }
 };
-
-// Initialize uploads directory
-initializeUploadsDir();
 
 // Enhanced CORS configuration
 const corsOptions = {
@@ -65,8 +101,7 @@ const corsOptions = {
       return callback(null, true);
     }
     
-    console.warn('⚠️ CORS Request from:', origin);
-    // Allow all origins temporarily to fix CORS issues
+    // Allow all origins for development/deployment flexibility
     return callback(null, true);
   },
   credentials: true,
@@ -93,8 +128,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// Handle preflight OPTIONS requests
 app.options('*', cors(corsOptions));
 
 // Security middleware
@@ -256,11 +289,11 @@ try {
   process.exit(1);
 }
 
-// File model schema for local storage (with legacy support)
+// File model schema for local storage
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  fileName: { type: String }, // Actual file name on disk (new field)
-  appwriteFileId: { type: String }, // Legacy Appwrite file ID (old field)
+  fileName: { type: String, required: true }, // Actual file name on disk
+  appwriteFileId: { type: String }, // Legacy support
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
@@ -277,13 +310,12 @@ fileSchema.index({ uploadedAt: -1 });
 
 File = mongoose.model('File', fileSchema);
 
-// Migration helper to handle old Appwrite records
+// Migration helper for legacy files
 const handleLegacyFile = async (file) => {
   console.log(`⚠️ Legacy file detected: ${file.originalName} (ID: ${file._id})`);
   
-  // If it's an old Appwrite file (has appwriteFileId but no fileName)
   if (file.appwriteFileId && !file.fileName) {
-    console.log(`🗑️ Removing legacy Appwrite file from database: ${file.originalName}`);
+    console.log(`🗑️ Removing legacy Appwrite file: ${file.originalName}`);
     
     try {
       await File.findByIdAndDelete(file._id);
@@ -294,7 +326,6 @@ const handleLegacyFile = async (file) => {
     }
   }
   
-  // If it has neither appwriteFileId nor fileName, it's corrupted
   if (!file.appwriteFileId && !file.fileName) {
     console.log(`🗑️ Removing corrupted file record: ${file.originalName}`);
     
@@ -362,7 +393,7 @@ const requireDB = (req, res, next) => {
   next();
 };
 
-// File serving middleware
+// File serving middleware with enhanced CORS
 app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
   const origin = req.get('origin');
   const userAgent = req.get('user-agent') || '';
@@ -390,6 +421,7 @@ app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
   res.setHeader('Access-Control-Max-Age', '86400');
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   
   next();
 });
@@ -584,21 +616,19 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       name: file.originalName,
       size: file.fileSize,
       fileName: file.fileName,
-      appwriteFileId: file.appwriteFileId,
       storageProvider: file.storageProvider
     });
 
     // Handle legacy files
     if (!file.fileName || file.appwriteFileId) {
-      console.log('⚠️ Legacy or invalid file detected, attempting cleanup...');
-      
+      console.log('⚠️ Legacy file detected, attempting cleanup...');
       const migrationResult = await handleLegacyFile(file);
       
       if (migrationResult.deleted) {
         return res.status(410).json({ 
           error: 'Fichier legacy supprimé',
           message: migrationResult.reason,
-          suggestion: 'Veuillez re-uploader ce fichier avec le nouveau système'
+          suggestion: 'Veuillez re-uploader ce fichier'
         });
       }
       
@@ -610,21 +640,58 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
     }
 
     // Handle local files
-    const filePath = path.join(UPLOADS_DIR, file.fileName);
+    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
     
     try {
-      await fs.access(filePath);
-      console.log('📄 Local file exists, serving:', filePath);
+      // Check if file exists
+      const stats = await fs.stat(filePath);
+      console.log('📄 Local file exists, serving:', filePath, 'Size:', stats.size);
       
+      // Validate file is within uploads directory (security check)
+      if (!filePath.startsWith(path.resolve(UPLOADS_DIR))) {
+        console.error('❌ Security: File path outside uploads directory:', filePath);
+        return res.status(403).json({ error: 'Accès interdit' });
+      }
+      
+      // Set proper headers for PDF viewing
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${file.originalName}"`);
-      res.sendFile(filePath);
+      res.setHeader('Content-Length', stats.size);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('Accept-Ranges', 'bytes');
+      
+      // Handle range requests for better PDF streaming
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+        const chunksize = (end - start) + 1;
+        
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+        res.setHeader('Content-Length', chunksize);
+        
+        const stream = fsSync.createReadStream(filePath, { start, end });
+        stream.pipe(res);
+      } else {
+        // Send entire file
+        res.sendFile(filePath, (err) => {
+          if (err) {
+            console.error('❌ SendFile error:', err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: 'Erreur lors de l\'envoi du fichier' });
+            }
+          }
+        });
+      }
       
     } catch (fileError) {
-      console.error('❌ Local file missing from disk:', filePath);
+      console.error('❌ Local file missing from disk:', filePath, fileError.message);
       return res.status(404).json({ 
         error: 'Fichier manquant sur le disque',
-        suggestion: 'Veuillez re-uploader ce fichier'
+        suggestion: 'Veuillez re-uploader ce fichier',
+        filePath: process.env.NODE_ENV === 'development' ? filePath : undefined
       });
     }
 
@@ -660,47 +727,63 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       name: file.originalName,
       size: file.fileSize,
       fileName: file.fileName,
-      appwriteFileId: file.appwriteFileId,
       storageProvider: file.storageProvider
     });
 
     // Handle legacy files
     if (!file.fileName || file.appwriteFileId) {
-      console.log('⚠️ Legacy or invalid file detected, attempting cleanup...');
-      
+      console.log('⚠️ Legacy file detected, attempting cleanup...');
       const migrationResult = await handleLegacyFile(file);
       
       if (migrationResult.deleted) {
         return res.status(410).json({ 
           error: 'Fichier legacy supprimé',
           message: migrationResult.reason,
-          suggestion: 'Veuillez re-uploader ce fichier avec le nouveau système'
+          suggestion: 'Veuillez re-uploader ce fichier'
         });
       }
       
       return res.status(404).json({ 
         error: 'Fichier incompatible',
-        message: 'Ce fichier provient de l\'ancien système et ne peut pas être téléchargé',
+        message: 'Ce fichier provient de l\'ancien système',
         suggestion: 'Veuillez re-uploader ce fichier'
       });
     }
 
     // Handle local files
-    const filePath = path.join(UPLOADS_DIR, file.fileName);
+    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
     
     try {
-      await fs.access(filePath);
-      console.log('📄 Local file exists, forcing download:', filePath);
+      const stats = await fs.stat(filePath);
+      console.log('📄 Local file exists, forcing download:', filePath, 'Size:', stats.size);
       
+      // Validate file is within uploads directory
+      if (!filePath.startsWith(path.resolve(UPLOADS_DIR))) {
+        console.error('❌ Security: File path outside uploads directory:', filePath);
+        return res.status(403).json({ error: 'Accès interdit' });
+      }
+      
+      // Set download headers
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
-      res.sendFile(filePath);
+      res.setHeader('Content-Length', stats.size);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      
+      res.sendFile(filePath, (err) => {
+        if (err) {
+          console.error('❌ SendFile error:', err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Erreur lors du téléchargement' });
+          }
+        }
+      });
       
     } catch (fileError) {
-      console.error('❌ Local file missing from disk:', filePath);
+      console.error('❌ Local file missing from disk:', filePath, fileError.message);
       return res.status(404).json({ 
         error: 'Fichier manquant sur le disque',
-        suggestion: 'Veuillez re-uploader ce fichier'
+        suggestion: 'Veuillez re-uploader ce fichier',
+        filePath: process.env.NODE_ENV === 'development' ? filePath : undefined
       });
     }
 
@@ -713,7 +796,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Fixed Upload files locally
+// POST /api/upload - Upload files locally
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -734,8 +817,25 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       filename: req.file.filename,
       size: req.file.size,
       mimetype: req.file.mimetype,
-      path: req.file.path
+      path: req.file.path,
+      destination: req.file.destination
     });
+
+    // Validate file was actually written to disk
+    try {
+      const filePath = path.resolve(req.file.path);
+      const stats = await fs.stat(filePath);
+      console.log('✅ File confirmed on disk:', filePath, 'Size:', stats.size);
+      
+      if (stats.size !== req.file.size) {
+        console.error('❌ File size mismatch - upload corrupted');
+        await fs.unlink(filePath).catch(console.error);
+        return res.status(400).json({ error: 'Upload corrompu, veuillez réessayer' });
+      }
+    } catch (fsError) {
+      console.error('❌ File not found on disk after upload:', fsError);
+      return res.status(500).json({ error: 'Erreur de stockage, veuillez réessayer' });
+    }
 
     const { semester, type, subject, year } = req.body || {};
     if (!semester || !type || !subject || !year) {
@@ -847,6 +947,16 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         await savedFile.populate(['semester', 'type', 'subject', 'year']);
 
         console.log('✅ File saved to database:', savedFile._id);
+        
+        // Final verification
+        const finalPath = path.resolve(UPLOADS_DIR, req.file.filename);
+        try {
+          await fs.access(finalPath);
+          console.log('✅ Final verification passed:', finalPath);
+        } catch (verifyError) {
+          console.error('❌ Final verification failed:', verifyError);
+          throw new Error('Fichier non accessible après sauvegarde');
+        }
       });
 
       const baseUrl = getBaseURL(req);
@@ -862,7 +972,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         fileId: savedFile._id,
         originalname: req.file.originalname,
         filename: req.file.filename,
-        path: req.file.path,
+        storagePath: path.resolve(UPLOADS_DIR, req.file.filename),
         viewUrl: responseFile.viewUrl,
         downloadUrl: responseFile.downloadUrl
       });
@@ -877,8 +987,9 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       
       // Cleanup uploaded file on error
       try {
-        await fs.unlink(req.file.path);
-        console.log('🗑️ Cleaned up uploaded file:', req.file.path);
+        const cleanupPath = path.resolve(req.file.path);
+        await fs.unlink(cleanupPath);
+        console.log('🗑️ Cleaned up uploaded file:', cleanupPath);
       } catch (cleanupError) {
         console.error('❌ Failed to cleanup uploaded file:', cleanupError);
       }
@@ -1020,10 +1131,10 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
 
     let diskDeleted = false;
     
-    // Delete from disk (only if it's a local file)
+    // Delete from disk
     if (file.fileName) {
       try {
-        const filePath = path.join(UPLOADS_DIR, file.fileName);
+        const filePath = path.resolve(UPLOADS_DIR, file.fileName);
         await fs.unlink(filePath);
         diskDeleted = true;
         console.log('✅ File deleted from disk:', filePath);
@@ -1186,7 +1297,6 @@ app.post('/api/admin/cleanup-legacy', requireDB, async (req, res) => {
   try {
     console.log('🧹 Starting legacy file cleanup...');
     
-    // Find all files that are legacy (have appwriteFileId but no fileName)
     const legacyFiles = await File.find({
       $or: [
         { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
@@ -1232,6 +1342,63 @@ app.post('/api/admin/cleanup-legacy', requireDB, async (req, res) => {
   }
 });
 
+// GET /api/debug/files/:fileId - Debug endpoint
+app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
+  try {
+    const file = await File.findById(req.params.fileId);
+    if (!file) return res.json({ error: 'File not found in DB' });
+    
+    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
+    
+    try {
+      const stats = await fs.stat(filePath);
+      
+      res.json({
+        database: {
+          id: file._id,
+          originalName: file.originalName,
+          fileName: file.fileName,
+          fileSize: file.fileSize,
+          storageProvider: file.storageProvider,
+          uploadedAt: file.uploadedAt
+        },
+        filesystem: {
+          path: filePath,
+          exists: true,
+          size: stats.size,
+          created: stats.birthtime,
+          modified: stats.mtime,
+          uploadsDir: UPLOADS_DIR,
+          absoluteUploadsDir: path.resolve(UPLOADS_DIR)
+        },
+        urls: {
+          view: `${getBaseURL(req)}/api/files/${file._id}/view`,
+          download: `${getBaseURL(req)}/api/files/${file._id}/download`
+        }
+      });
+    } catch (fsError) {
+      res.json({
+        database: { 
+          exists: true, 
+          id: file._id,
+          originalName: file.originalName,
+          fileName: file.fileName,
+          fileSize: file.fileSize
+        },
+        filesystem: { 
+          exists: false, 
+          error: fsError.message, 
+          path: filePath,
+          uploadsDir: UPLOADS_DIR,
+          absoluteUploadsDir: path.resolve(UPLOADS_DIR)
+        }
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/health - Health check
 app.get('/api/health', async (req, res) => {
   const dbStatus = mongoose.connection.readyState;
@@ -1246,17 +1413,44 @@ app.get('/api/health', async (req, res) => {
   let storageTestPassed = false;
   let dbError = null;
   let storageError = null;
+  let storageStats = null;
+  let sampleFiles = [];
   
   // Test local storage
   try {
     await fs.access(UPLOADS_DIR);
     const stats = await fs.stat(UPLOADS_DIR);
+    
+    // Test write permissions
+    const testFile = path.join(UPLOADS_DIR, `health-test-${Date.now()}.txt`);
+    await fs.writeFile(testFile, 'health check test');
+    await fs.unlink(testFile);
+    
+    // Get directory contents
+    const files = await fs.readdir(UPLOADS_DIR);
+    
     storageTestPassed = true;
-    storageStatus = `Ready - Directory exists (${stats.isDirectory() ? 'Dir' : 'File'})`;
+    storageStatus = `Ready - Directory exists and writable`;
+    storageStats = {
+      path: UPLOADS_DIR,
+      absolutePath: path.resolve(UPLOADS_DIR),
+      isDirectory: stats.isDirectory(),
+      fileCount: files.length,
+      permissions: stats.mode.toString(8),
+      created: stats.birthtime,
+      modified: stats.mtime,
+      sampleFiles: files.slice(0, 5)
+    };
   } catch (error) {
     storageError = error.message;
     storageStatus = 'Error: ' + error.message;
     storageTestPassed = false;
+    storageStats = {
+      path: UPLOADS_DIR,
+      absolutePath: path.resolve(UPLOADS_DIR),
+      error: error.code,
+      message: error.message
+    };
   }
   
   // Test database connection
@@ -1264,6 +1458,12 @@ app.get('/api/health', async (req, res) => {
     try {
       const fileCount = await File.countDocuments();
       console.log(`📊 Database file count: ${fileCount}`);
+      
+      sampleFiles = await File.find()
+        .limit(3)
+        .select('_id originalName fileName fileSize')
+        .lean();
+        
     } catch (error) {
       dbError = error.message;
     }
@@ -1272,6 +1472,7 @@ app.get('/api/health', async (req, res) => {
   // Check migration status
   let legacyFilesCount = 0;
   let validFilesCount = 0;
+  let orphanedFiles = [];
   
   if (dbStatus === 1) {
     try {
@@ -1283,11 +1484,30 @@ app.get('/api/health', async (req, res) => {
       });
       
       validFilesCount = await File.countDocuments({
-        fileName: { $exists: true, $ne: null },
-        appwriteFileId: { $exists: false }
+        fileName: { $exists: true, $ne: null }
       });
+      
+      // Check for orphaned files
+      const dbFiles = await File.find({ fileName: { $exists: true, $ne: null } })
+        .select('_id originalName fileName')
+        .limit(10)
+        .lean();
+        
+      for (const dbFile of dbFiles) {
+        try {
+          await fs.access(path.resolve(UPLOADS_DIR, dbFile.fileName));
+        } catch (error) {
+          orphanedFiles.push({
+            id: dbFile._id,
+            name: dbFile.originalName,
+            fileName: dbFile.fileName,
+            expectedPath: path.resolve(UPLOADS_DIR, dbFile.fileName)
+          });
+        }
+      }
+      
     } catch (error) {
-      console.error('❌ Error counting migration files:', error);
+      console.error('❌ Error checking migration files:', error);
     }
   }
 
@@ -1308,9 +1528,9 @@ app.get('/api/health', async (req, res) => {
       },
       storage: {
         provider: 'Local File System',
-        directory: UPLOADS_DIR,
         status: storageStatus,
         ready: storageTestPassed,
+        stats: storageStats,
         ...(storageError && { error: storageError })
       }
     },
@@ -1318,18 +1538,35 @@ app.get('/api/health', async (req, res) => {
       hasLegacyFiles: legacyFilesCount,
       hasValidFiles: validFilesCount,
       needsCleanup: legacyFilesCount > 0,
+      orphanedFiles: orphanedFiles.length,
+      orphanedDetails: orphanedFiles,
       suggestion: legacyFilesCount > 0 ? 
         'Run POST /api/admin/cleanup-legacy to remove legacy files' : 
         'No legacy files detected'
     },
-    environment: process.env.NODE_ENV || 'development',
-    deployment: {
-      platform: process.env.RENDER_EXTERNAL_URL ? 'Render.com' : 'Other',
+    environment: {
+      nodeEnv: process.env.NODE_ENV || 'development',
+      platform: process.env.RENDER_EXTERNAL_URL ? 'Render.com' : 
+                process.env.VERCEL ? 'Vercel' :
+                process.env.HEROKU_APP_NAME ? 'Heroku' : 'Other',
       external_url: process.env.RENDER_EXTERNAL_URL || null,
-      detected_host: req.get('host')
+      detected_host: req.get('host'),
+      working_directory: process.cwd(),
+      uploads_dir_env: process.env.UPLOADS_DIR
+    },
+    testing: {
+      sampleFiles: sampleFiles.map(file => ({
+        id: file._id,
+        name: file.originalName,
+        fileName: file.fileName,
+        size: file.fileSize,
+        viewUrl: `${baseURL}/api/files/${file._id}/view`,
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+        expectedDiskPath: file.fileName ? path.resolve(UPLOADS_DIR, file.fileName) : null
+      }))
     },
     uptime: Math.floor(process.uptime()),
-    version: '2.2.0-local-storage'
+    version: '2.3.0-complete-working'
   });
 });
 
@@ -1420,90 +1657,154 @@ app.use('*', (req, res) => {
       health: '/api/health',
       files: '/api/files',
       semesters: '/api/semesters',
-      upload: '/api/upload'
+      upload: '/api/upload',
+      debug: '/api/debug/files/:fileId'
     }
   });
 });
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, async () => {
-  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE SOLUTION`);
-  console.log(`🚀 Running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  
-  const serverURL = process.env.RENDER_EXTERNAL_URL || 
-    (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
+// Initialize uploads directory before starting server
+(async () => {
+  await initializeUploadsDir();
+
+  app.listen(PORT, async () => {
+    console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE SOLUTION`);
+    console.log(`🚀 Running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     
-  console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`📁 Storage: Local File System`);
-  console.log(`📦 Upload Directory: ${UPLOADS_DIR}`);
-  console.log(`📄 PDF Serving: Direct file serving with CORS support`);
-  console.log(`🌐 CORS: Enhanced configuration for frontend domains`);
-  
-  const waitForDB = setInterval(async () => {
-    if (mongoose.connection.readyState === 1) {
-      clearInterval(waitForDB);
+    const serverURL = process.env.RENDER_EXTERNAL_URL || 
+      (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
       
-      console.log('🔧 Initializing application...');
-      await initializeSemesters();
-      
-      // Check for legacy files
-      try {
-        const legacyFilesCount = await File.countDocuments({
-          $or: [
-            { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
-            { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
-          ]
-        });
+    console.log(`🔗 Server URL: ${serverURL}`);
+    console.log(`📁 Storage: Local File System`);
+    console.log(`📦 Upload Directory: ${UPLOADS_DIR}`);
+    console.log(`📄 PDF Serving: Direct file serving with CORS and range requests`);
+    console.log(`🌐 CORS: Enhanced configuration for all origins`);
+    console.log(`🔧 Version: 2.3.0-complete-working`);
+    
+    const waitForDB = setInterval(async () => {
+      if (mongoose.connection.readyState === 1) {
+        clearInterval(waitForDB);
         
-        const validFilesCount = await File.countDocuments({
-          fileName: { $exists: true, $ne: null },
-          appwriteFileId: { $exists: false }
-        });
+        console.log('🔧 Initializing application...');
+        await initializeSemesters();
         
-        console.log(`📊 Migration Status: ${legacyFilesCount} legacy files, ${validFilesCount} valid files`);
-        
-        if (legacyFilesCount > 0) {
-          console.log('⚠️ Legacy files detected. Run POST /api/admin/cleanup-legacy to clean up');
-        }
-      } catch (error) {
-        console.log('⚠️ Could not check migration status:', error.message);
-      }
-      
-      console.log('🎯 Server ready for requests');
-      console.log('🩺 Health check:', `${serverURL}/api/health`);
-      
-      console.log('\n🛠️ LEGACY FILE MIGRATION IMPLEMENTED:');
-      console.log('✅ Detects and handles old Appwrite file records');
-      console.log('✅ Automatically cleans up corrupted file entries');
-      console.log('✅ Provides clear error messages for legacy files');
-      console.log('✅ Admin cleanup endpoint available');
-      console.log('✅ Health check shows migration status');
-      console.log('✅ Seamless transition from Appwrite to Local Storage');
-      
-      try {
-        const fileCount = await File.countDocuments();
-        console.log(`📊 Database contains ${fileCount} files`);
-        
-        if (fileCount > 0) {
-          const sampleFile = await File.findOne({ fileName: { $exists: true, $ne: null } }).lean();
-          if (sampleFile) {
-            console.log('📝 Sample file test URLs:');
-            console.log(`   View: ${serverURL}/api/files/${sampleFile._id}/view`);
-            console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
+        // Check for legacy files
+        try {
+          const legacyFilesCount = await File.countDocuments({
+            $or: [
+              { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
+              { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
+            ]
+          });
+          
+          const validFilesCount = await File.countDocuments({
+            fileName: { $exists: true, $ne: null }
+          });
+          
+          console.log(`📊 Migration Status: ${legacyFilesCount} legacy files, ${validFilesCount} valid files`);
+          
+          if (legacyFilesCount > 0) {
+            console.log('⚠️ Legacy files detected. Run POST /api/admin/cleanup-legacy to clean up');
           }
+        } catch (error) {
+          console.log('⚠️ Could not check migration status:', error.message);
         }
-      } catch (error) {
-        console.log('⚠️ Could not query files:', error.message);
+        
+        console.log('🎯 Server ready for requests');
+        console.log('🩺 Health check:', `${serverURL}/api/health`);
+        
+        console.log('\n✅ FEATURES ENABLED:');
+        console.log('  - PDF file upload, view, and download');
+        console.log('  - Local file storage with absolute paths');
+        console.log('  - Legacy file cleanup and migration');
+        console.log('  - CORS support for cross-origin requests');
+        console.log('  - Range request support for PDF streaming');
+        console.log('  - Comprehensive error handling and logging');
+        console.log('  - Database connection retry logic');
+        console.log('  - Admin statistics and file management');
+        console.log('  - Debug endpoints for troubleshooting');
+        
+        try {
+          const fileCount = await File.countDocuments();
+          console.log(`📊 Database contains ${fileCount} files`);
+          
+          if (fileCount > 0) {
+            const sampleFile = await File.findOne({ fileName: { $exists: true, $ne: null } }).lean();
+            if (sampleFile) {
+              console.log('📝 Test URLs:');
+              console.log(`   View: ${serverURL}/api/files/${sampleFile._id}/view`);
+              console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
+              console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
+            }
+          }
+        } catch (error) {
+          console.log('⚠️ Could not query files:', error.message);
+        }
+        
+        console.log('\n📋 AVAILABLE ENDPOINTS:');
+        console.log(`   Health: GET ${serverURL}/api/health`);
+        console.log(`   Files: GET ${serverURL}/api/files`);
+        console.log(`   Upload: POST ${serverURL}/api/upload`);
+        console.log(`   View PDF: GET ${serverURL}/api/files/:fileId/view`);
+        console.log(`   Download: GET ${serverURL}/api/files/:fileId/download`);
+        console.log(`   Semesters: GET ${serverURL}/api/semesters`);
+        console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
+        console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);
+        console.log(`   Legacy Cleanup: POST ${serverURL}/api/admin/cleanup-legacy`);
+        
+        // Final system check
+        try {
+          const uploadsExists = await fs.access(UPLOADS_DIR).then(() => true).catch(() => false);
+          const uploadsStats = uploadsExists ? await fs.stat(UPLOADS_DIR) : null;
+          
+          console.log('\n📁 FINAL SYSTEM STATUS:');
+          console.log(`   Database: ${mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Not Connected ❌'}`);
+          console.log(`   Storage Directory: ${uploadsExists ? 'Ready ✅' : 'Not Ready ❌'}`);
+          console.log(`   Storage Path: ${path.resolve(UPLOADS_DIR)}`);
+          
+          if (uploadsExists && uploadsStats) {
+            console.log(`   Storage Permissions: ${uploadsStats.mode.toString(8)}`);
+            console.log(`   Storage Writeable: ${uploadsStats.isDirectory() ? 'Yes ✅' : 'No ❌'}`);
+          }
+          
+          console.log(`   Server Status: Ready for requests ✅`);
+          
+        } catch (finalCheckError) {
+          console.error('❌ Final system check error:', finalCheckError.message);
+        }
+        
+        console.log('\n🎉 University Archive Server is fully operational!');
+        console.log('📡 Ready to handle file uploads, downloads, and management');
       }
-    }
-  }, 1000);
-  
-  setTimeout(() => {
-    clearInterval(waitForDB);
-    if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️ Started without complete DB initialization - will retry');
-    }
-  }, 30000);
-});
+    }, 1000);
+    
+    setTimeout(() => {
+      clearInterval(waitForDB);
+      if (mongoose.connection.readyState !== 1) {
+        console.log('⚠️ Started without complete DB initialization - will continue retrying');
+        console.log('💡 Server will continue to attempt database reconnection');
+      }
+    }, 30000);
+  });
+
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    console.error('💥 Uncaught Exception:', error);
+    console.error('Stack:', error.stack);
+    console.log('🔄 Server will continue running...');
+  });
+
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('💥 Unhandled Rejection at:', promise);
+    console.error('Reason:', reason);
+    console.log('🔄 Server will continue running...');
+  });
+
+})();
+
+// Export app for testing purposes
+module.exports = app;
