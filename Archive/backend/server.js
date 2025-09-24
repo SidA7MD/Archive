@@ -773,7 +773,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   });
 });
 
-// FIXED PDF VIEW ROUTE - This is the main fix for your issue
+// FIXED PDF VIEW ROUTE - Completely removed path.join() dependency
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   console.log(`📄 PDF View request for: ${fileId} from ${req.ip}`);
@@ -859,7 +859,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
 
       downloadStream.pipe(res);
     } else {
-      // Serve full file
+      // Serve full file - NO PATH.JOIN USED HERE
       console.log(`📄 Serving full file: ${file.originalName}`);
 
       const downloadStream = gridFSBucket.openDownloadStream(file.gridFSId);
@@ -892,7 +892,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   }
 });
 
-// FIXED PDF DOWNLOAD ROUTE
+// FIXED PDF DOWNLOAD ROUTE - No path.join() used
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   console.log(`⬇️  Download request for: ${fileId} from ${req.ip}`);
@@ -1333,7 +1333,7 @@ app.listen(PORT, async () => {
     
   console.log(`🔗 Server URL: ${serverURL}`);
   console.log(`💾 File Storage: GridFS (MongoDB)`);
-  console.log(`📄 PDF Serving: FIXED - Removed path.join() issues`);
+  console.log(`📄 PDF Serving: FIXED - Removed all path.join() dependencies`);
   
   const waitForDB = setInterval(async () => {
     if (mongoose.connection.readyState === 1 && gridFSBucket) {
