@@ -5,6 +5,7 @@ const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const url = require('url');
 require('dotenv').config();
 
 const { v2: cloudinary } = require('cloudinary');
@@ -300,6 +301,13 @@ function getFileExtension(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : 'pdf';
 }
 
+// Helper to ensure filename ends with .pdf
+function ensurePdfExtension(filename) {
+  if (!filename) return 'document.pdf';
+  if (filename.toLowerCase().endsWith('.pdf')) return filename;
+  return `${filename}.pdf`;
+}
+
 // API ROUTES
 
 // GET /api/semesters
@@ -383,8 +391,7 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .lean();
     res.json(files.map(file => ({
       ...file,
-      viewUrl: file.cloudinaryUrl,
-      downloadUrl: file.cloudinaryUrl,
+      downloadUrl: `${getBaseURL(req)}/api/files/${file._id}/download`,
       storageProvider: 'cloudinary',
       fileType: getFileExtension(file.originalName)
     })));
@@ -417,11 +424,11 @@ app.get('/api/files', requireDB, async (req, res) => {
         .lean(),
       File.countDocuments(filter)
     ]);
+    const baseURL = getBaseURL(req);
     res.json({
       files: files.map(file => ({
         ...file,
-        viewUrl: file.cloudinaryUrl,
-        downloadUrl: file.cloudinaryUrl,
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
         storageProvider: 'cloudinary',
         fileType: getFileExtension(file.originalName)
       })),
@@ -434,7 +441,7 @@ app.get('/api/files', requireDB, async (req, res) => {
         hasPrev: page > 1
       },
       total,
-      baseURL: getBaseURL(req)
+      baseURL
     });
   } catch (error) {
     console.error('❌ Error fetching paginated files:', error);
@@ -442,103 +449,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/view - Enhanced PDF viewing with mobile support
-app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
-  const fileId = req.params.fileId;
-  try {
-    if (!mongoose.Types.ObjectId.isValid(fileId)) {
-      return res.status(400).json({ error: 'ID de fichier invalide' });
-    }
-    const file = await File.findById(fileId).lean();
-    if (!file) {
-      return res.status(404).json({ error: 'Fichier introuvable' });
-    }
-    
-    // For mobile devices, redirect to Cloudinary URL for better compatibility
-    if (isMobileDevice(req)) {
-      console.log('📱 Mobile device detected - redirecting to Cloudinary URL');
-      return res.redirect(file.cloudinaryUrl);
-    }
-    
-    // For desktop, use proper streaming with correct headers
-    console.log('💻 Desktop device - streaming PDF with proper headers');
-    
-    // Set proper headers for inline PDF viewing
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range');
-    
-    // Handle range requests for PDF streaming
-    const rangeHeader = req.headers.range;
-    
-    // Fetch the file from Cloudinary and stream it
-    const https = require('https');
-    const http = require('http');
-    const url = require('url');
-    
-    const parsedUrl = url.parse(file.cloudinaryUrl);
-    const client = parsedUrl.protocol === 'https:' ? https : http;
-    
-    const requestOptions = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port,
-      path: parsedUrl.path,
-      method: 'GET',
-      headers: {}
-    };
-    
-    // Forward range header if present
-    if (rangeHeader) {
-      requestOptions.headers['Range'] = rangeHeader;
-    }
-    
-    const request = client.request(requestOptions, (cloudinaryRes) => {
-      // Forward status code
-      res.statusCode = cloudinaryRes.statusCode;
-      
-      // Forward relevant headers
-      const headersToForward = [
-        'content-length', 'content-range', 'last-modified', 
-        'etag', 'content-type', 'accept-ranges'
-      ];
-      
-      headersToForward.forEach(header => {
-        if (cloudinaryRes.headers[header]) {
-          res.setHeader(header, cloudinaryRes.headers[header]);
-        }
-      });
-      
-      // Pipe the file data to the response
-      cloudinaryRes.pipe(res);
-    });
-    
-    request.on('error', (error) => {
-      console.error('❌ View request error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Erreur lors de la visualisation' });
-      }
-    });
-    
-    request.setTimeout(30000, () => {
-      request.destroy();
-      if (!res.headersSent) {
-        res.status(408).json({ error: 'Timeout lors de la visualisation' });
-      }
-    });
-    
-    request.end();
-    
-  } catch (error) {
-    console.error('❌ View error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Erreur lors de la visualisation' });
-    }
-  }
-});
-
-// GET /api/files/:fileId/download - Enhanced download for all devices
+// GET /api/files/:fileId/download - Universal download solution for all devices
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   try {
@@ -550,76 +461,75 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
     
-    // For mobile devices, we'll force download with proper filename
-    if (isMobileDevice(req)) {
-      console.log('📱 Mobile download - forcing download with proper headers');
-      
-      // Fetch file and stream it with download headers
-      const https = require('https');
-      const http = require('http');
-      
-      const parsedUrl = url.parse(file.cloudinaryUrl);
-      const client = parsedUrl.protocol === 'https:' ? https : http;
-      
-      client.get(file.cloudinaryUrl, (cloudinaryRes) => {
-        if (cloudinaryRes.statusCode !== 200) {
-          return res.status(500).json({ error: 'Erreur lors du téléchargement du fichier' });
-        }
-        
-        // Set headers to force download with proper filename
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
-        res.setHeader('Cache-Control', 'no-cache');
-        
-        if (cloudinaryRes.headers['content-length']) {
-          res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
-        }
-        
-        // Pipe the file data to the response
-        cloudinaryRes.pipe(res);
-      }).on('error', (error) => {
-        console.error('❌ Mobile download error:', error);
-        res.status(500).json({ error: 'Erreur lors du téléchargement' });
-      });
-      
-      return;
-    }
+    // Ensure the filename ends with .pdf
+    const filename = ensurePdfExtension(file.originalName);
+    console.log(`📥 Download request for: ${filename} (ID: ${fileId})`);
     
-    // For desktop, redirect to Cloudinary with download parameter
-    console.log('💻 Desktop download - redirecting to Cloudinary');
+    // Get the Cloudinary URL
+    const cloudinaryUrl = file.cloudinaryUrl;
     
-    // Create a download URL that forces download
-    const downloadUrl = file.cloudinaryUrl.replace(/\/upload\//, '/upload/fl_attachment/');
-    res.redirect(downloadUrl);
+    const https = require('https');
+    const http = require('http');
+    
+    // Parse the Cloudinary URL
+    const parsedUrl = url.parse(cloudinaryUrl);
+    const client = parsedUrl.protocol === 'https:' ? https : http;
+    
+    const requestOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port,
+      path: parsedUrl.path,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'University Archive Server'
+      }
+    };
+    
+    console.log(`🔄 Requesting file from Cloudinary: ${cloudinaryUrl}`);
+    
+    // Create the request to Cloudinary
+    const request = client.request(requestOptions, (cloudinaryRes) => {
+      if (cloudinaryRes.statusCode !== 200) {
+        console.error(`❌ Cloudinary error: ${cloudinaryRes.statusCode}`);
+        return res.status(500).json({ error: 'Erreur lors du téléchargement du fichier depuis Cloudinary' });
+      }
+      
+      // Set headers to force download with proper filename
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader('Cache-Control', 'no-cache');
+      
+      if (cloudinaryRes.headers['content-length']) {
+        res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
+      }
+      
+      console.log(`✅ Streaming download response with filename: ${filename}`);
+      
+      // Pipe the file data to the response
+      cloudinaryRes.pipe(res);
+    });
+    
+    request.on('error', (error) => {
+      console.error(`❌ Download request error: ${error.message}`);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Erreur lors du téléchargement', message: error.message });
+      }
+    });
+    
+    request.setTimeout(30000, () => {
+      request.destroy();
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Timeout lors du téléchargement' });
+      }
+    });
+    
+    request.end();
     
   } catch (error) {
     console.error('❌ Download error:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Erreur lors du téléchargement' });
     }
-  }
-});
-
-// NEW: GET /api/files/:fileId/open - Open PDF in new tab (universal solution)
-app.get('/api/files/:fileId/open', requireDB, async (req, res) => {
-  const fileId = req.params.fileId;
-  try {
-    if (!mongoose.Types.ObjectId.isValid(fileId)) {
-      return res.status(400).json({ error: 'ID de fichier invalide' });
-    }
-    const file = await File.findById(fileId).lean();
-    if (!file) {
-      return res.status(404).json({ error: 'Fichier introuvable' });
-    }
-    
-    // Always redirect to Cloudinary URL for opening in new tab
-    // This works consistently across all devices and browsers
-    console.log('🔗 Opening PDF in new tab via Cloudinary URL');
-    res.redirect(file.cloudinaryUrl);
-    
-  } catch (error) {
-    console.error('❌ Open error:', error);
-    res.status(500).json({ error: 'Erreur lors de l\'ouverture du fichier' });
   }
 });
 
@@ -719,7 +629,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         }
         // Create file document
         const fileDoc = new File({
-          originalName: req.file.originalname,
+          originalName: ensurePdfExtension(req.file.originalname),
           cloudinaryPublicId: cloudinaryFile.public_id,
           cloudinaryUrl: cloudinaryFile.secure_url,
           fileSize: req.file.size,
@@ -735,12 +645,11 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         await savedFile.populate(['semester', 'type', 'subject', 'year']);
       });
       await session.endSession();
+      const baseURL = getBaseURL(req);
       const responseFile = {
         ...savedFile.toObject(),
-        viewUrl: savedFile.cloudinaryUrl,
-        downloadUrl: savedFile.cloudinaryUrl,
-        openUrl: `${getBaseURL(req)}/api/files/${savedFile._id}/open`,
-        fileType: getFileExtension(req.file.originalname)
+        downloadUrl: `${baseURL}/api/files/${savedFile._id}/download`,
+        fileType: 'pdf'
       };
       res.status(201).json({ 
         message: 'Fichier uploadé avec succès',
@@ -825,7 +734,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
       const updatedFile = await File.findByIdAndUpdate(
         fileId,
         {
-          originalName,
+          originalName: ensurePdfExtension(originalName),
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
@@ -834,9 +743,15 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         },
         { new: true, session }
       ).populate(['semester', 'type', 'subject', 'year']);
+      
+      const baseURL = getBaseURL(req);
       res.json({
         message: 'Fichier mis à jour avec succès',
-        file: updatedFile
+        file: {
+          ...updatedFile.toObject(),
+          downloadUrl: `${baseURL}/api/files/${updatedFile._id}/download`,
+          fileType: 'pdf'
+        }
       });
     });
     await session.endSession();
@@ -885,13 +800,12 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
+    const baseURL = getBaseURL(req);
     res.json(files.map(file => ({
       ...file,
-      viewUrl: file.cloudinaryUrl,
-      downloadUrl: file.cloudinaryUrl,
-      openUrl: `${getBaseURL(req)}/api/files/${file._id}/open`,
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
       storageProvider: 'cloudinary',
-      fileType: getFileExtension(file.originalName)
+      fileType: 'pdf'
     })));
   } catch (error) {
     console.error('❌ Admin files fetch failed:', error);
@@ -987,10 +901,8 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: file.cloudinaryUrl,
-        downloadUrl: file.cloudinaryUrl,
-        openUrl: `${baseURL}/api/files/${file._id}/open`,
-        fileType: getFileExtension(file.originalName),
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+        fileType: 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
       storageProvider: 'Cloudinary',
@@ -1019,9 +931,7 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
         uploadedAt: file.uploadedAt
       },
       urls: {
-        view: `${baseURL}/api/files/${file._id}/view`,
         download: `${baseURL}/api/files/${file._id}/download`,
-        open: `${baseURL}/api/files/${file._id}/open`,
         direct: file.cloudinaryUrl
       },
       deviceDetection: {
@@ -1092,13 +1002,11 @@ app.get('/api/health', async (req, res) => {
         cloudinaryPublicId: file.cloudinaryPublicId,
         cloudinaryUrl: file.cloudinaryUrl,
         size: file.fileSize,
-        viewUrl: `${baseURL}/api/files/${file._id}/view`,
-        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        openUrl: `${baseURL}/api/files/${file._id}/open`
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`
       }))
     },
     uptime: Math.floor(process.uptime()),
-    version: '2.4.0-cloudinary-enhanced'
+    version: '3.0.0-unified-download'
   });
 });
 
@@ -1181,9 +1089,7 @@ app.use('*', (req, res) => {
       files: '/api/files',
       semesters: '/api/semesters',
       upload: '/api/upload',
-      view: '/api/files/:fileId/view',
       download: '/api/files/:fileId/download',
-      open: '/api/files/:fileId/open',
       debug: '/api/debug/files/:fileId'
     }
   });
@@ -1199,10 +1105,9 @@ app.listen(PORT, async () => {
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
   console.log(`🔗 Server URL: ${serverURL}`);
   console.log(`🌥️ Storage: Cloudinary`);
-  console.log(`📄 PDF Serving: Enhanced for mobile & desktop devices`);
-  console.log(`🆕 New endpoint: /api/files/:fileId/open - Universal PDF opener`);
+  console.log(`📄 PDF Serving: Unified download system optimized for all devices`);
   console.log(`🌐 CORS: Enhanced configuration for all origins`);
-  console.log(`🔧 Version: 2.4.0-cloudinary-enhanced`);
+  console.log(`🔧 Version: 3.0.0-unified-download`);
   
   // Wait for DB then initialize semesters
   const waitForDB = setInterval(async () => {
@@ -1219,9 +1124,7 @@ app.listen(PORT, async () => {
           const sampleFile = await File.findOne().lean();
           if (sampleFile) {
             console.log('📝 Test URLs:');
-            console.log(`   View (inline): ${serverURL}/api/files/${sampleFile._id}/view`);
             console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
-            console.log(`   Open (new tab): ${serverURL}/api/files/${sampleFile._id}/open`);
             console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
           }
         }
@@ -1232,9 +1135,7 @@ app.listen(PORT, async () => {
       console.log(`   Health: GET ${serverURL}/api/health`);
       console.log(`   Files: GET ${serverURL}/api/files`);
       console.log(`   Upload: POST ${serverURL}/api/upload`);
-      console.log(`   View PDF: GET ${serverURL}/api/files/:fileId/view`);
       console.log(`   Download: GET ${serverURL}/api/files/:fileId/download`);
-      console.log(`   Open PDF: GET ${serverURL}/api/files/:fileId/open`);
       console.log(`   Semesters: GET ${serverURL}/api/semesters`);
       console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
       console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);

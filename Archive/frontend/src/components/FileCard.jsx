@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, Download, FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle } from 'lucide-react';
+import { FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle, ExternalLink } from 'lucide-react';
 
 // API config for backend URLs
 export const API_CONFIG = {
@@ -23,70 +23,32 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Returns backend view/download endpoint
-  const getFileURL = (type = 'view') => {
+  // Returns file download URL
+  const getFileURL = () => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     if (file._id) {
-      return `${baseUrl}/api/files/${file._id}/${type}`;
+      return `${baseUrl}/api/files/${file._id}/download`;
     }
     return null;
   };
 
-  // View PDF in a new tab - FIXED to properly open PDFs inline
-  const handleView = () => {
+  // Unified function to handle file access (downloads automatically on mobile devices)
+  const handleFileAccess = () => {
     setError(null);
-    const url = getFileURL('view');
-    if (url) {
-      // Open in new tab with proper window features for PDF viewing
-      const newWindow = window.open(url, '_blank', 'noopener,noreferrer,width=1200,height=800,scrollbars=yes,resizable=yes');
-      
-      // Fallback: if popup was blocked, try direct navigation
-      if (!newWindow) {
-        // Try alternative method
-        const link = document.createElement('a');
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
-    } else {
-      setError('URL de visualisation non disponible');
-    }
-  };
-
-  // Download PDF - FIXED to properly download files
-  const handleDownload = async () => {
-    setLoading(true); 
-    setError(null);
+    setLoading(true);
     
     try {
-      const url = getFileURL('download');
-      if (!url) throw new Error('URL de téléchargement non disponible');
+      const url = getFileURL();
+      if (!url) throw new Error('URL non disponible');
       
-      // Create a temporary link element to trigger download
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = file.originalName || 'document.pdf';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
+      // Open in new tab - will download or display depending on browser/device capabilities
+      window.open(url, '_blank', 'noopener,noreferrer');
       
-      // Append to body temporarily
-      document.body.appendChild(link);
-      
-      // Trigger the download
-      link.click();
-      
-      // Clean up
-      document.body.removeChild(link);
-      
-      // Optional: Add a small delay to show loading state
+      // Add small delay to show loading state
       setTimeout(() => setLoading(false), 1000);
-      
     } catch (err) {
-      console.error('Download error:', err);
-      setError(`Téléchargement impossible: ${err.message}`);
+      console.error('File access error:', err);
+      setError(`Impossible d'accéder au fichier: ${err.message}`);
       setLoading(false);
     }
   };
@@ -182,14 +144,8 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     gap: '0.25rem',
   };
 
-  const buttonsContainerStyles = {
-    display: 'flex',
-    gap: '0.5rem',
-    marginTop: 'auto',
-  };
-
-  const buttonBaseStyles = {
-    flex: 1,
+  const buttonStyles = {
+    width: '100%',
     padding: '0.75rem 1rem',
     borderRadius: '8px',
     border: 'none',
@@ -202,31 +158,21 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     justifyContent: 'center',
     gap: '0.5rem',
     opacity: loading ? 0.6 : 1,
-  };
-
-  const viewButtonStyles = {
-    ...buttonBaseStyles,
     background: theme.gradient,
     color: 'white',
     boxShadow: `0 4px 15px ${theme.shadow}`,
+    marginTop: 'auto'
   };
 
-  const downloadButtonStyles = {
-    ...buttonBaseStyles,
-    background: 'rgba(0,0,0,0.05)',
-    color: '#374151',
-    border: '1px solid rgba(0,0,0,0.1)',
-  };
-
-  // Add hover effects
-  const [hovered, setHovered] = useState({ view: false, download: false });
+  // Add hover effect
+  const [hovered, setHovered] = useState(false);
 
   return (
     <div style={containerStyles}>
       <div style={headerStyles}>
         {fileIcon}
       </div>
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <h3 style={titleStyles}>
           {file.originalName || 'Document sans nom'}
         </h3>
@@ -240,42 +186,23 @@ export const FileCard = ({ file, apiBaseUrl }) => {
             {error}
           </div>
         )}
-        <div style={buttonsContainerStyles}>
-          <button
-            style={{
-              ...viewButtonStyles,
-              transform: hovered.view ? 'translateY(-2px)' : 'translateY(0)',
-              boxShadow: hovered.view 
-                ? `0 8px 25px ${theme.shadow}` 
-                : `0 4px 15px ${theme.shadow}`,
-            }}
-            onClick={handleView}
-            disabled={loading}
-            onMouseEnter={() => setHovered({ ...hovered, view: true })}
-            onMouseLeave={() => setHovered({ ...hovered, view: false })}
-            title={`Ouvrir ${file.originalName} dans un nouvel onglet`}
-          >
-            <Eye size={18} />
-            {loading ? 'Ouverture...' : 'Ouvrir'}
-          </button>
-          <button
-            style={{
-              ...downloadButtonStyles,
-              transform: hovered.download ? 'translateY(-2px)' : 'translateY(0)',
-              boxShadow: hovered.download 
-                ? '0 8px 25px rgba(0,0,0,0.15)' 
-                : '0 2px 10px rgba(0,0,0,0.1)',
-            }}
-            onClick={handleDownload}
-            disabled={loading}
-            onMouseEnter={() => setHovered({ ...hovered, download: true })}
-            onMouseLeave={() => setHovered({ ...hovered, download: false })}
-            title={`Télécharger ${file.originalName}`}
-          >
-            <Download size={18} />
-            {loading ? 'Téléchargement...' : 'Télécharger'}
-          </button>
-        </div>
+        <button
+          style={{
+            ...buttonStyles,
+            transform: hovered ? 'translateY(-2px)' : 'translateY(0)',
+            boxShadow: hovered 
+              ? `0 8px 25px ${theme.shadow}` 
+              : `0 4px 15px ${theme.shadow}`,
+          }}
+          onClick={handleFileAccess}
+          disabled={loading}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          title={`Ouvrir ${file.originalName}`}
+        >
+          <ExternalLink size={18} />
+          {loading ? 'Chargement...' : 'Ouvrir le document'}
+        </button>
       </div>
     </div>
   );
