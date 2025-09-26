@@ -23,70 +23,78 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Returns backend view/download endpoint or direct Cloudinary link
+  // Returns backend view/download endpoint
   const getFileURL = (type = 'view') => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     if (file._id) {
       return `${baseUrl}/api/files/${file._id}/${type}`;
     }
-    if (type === 'view' && file.viewUrl) return file.viewUrl;
-    if (type === 'download' && file.downloadUrl) return file.downloadUrl;
     return null;
   };
 
-  // View PDF in new tab
-  const handleView = async () => {
-    setLoading(true); setError(null);
-    try {
-      const viewUrl = getFileURL('view');
-      if (!viewUrl) throw new Error('URL de visualisation non disponible');
-      window.open(viewUrl, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      setError(`Erreur: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Download PDF
-  const handleDownload = async () => {
-    setLoading(true); setError(null);
-    try {
-      const downloadUrl = getFileURL('download');
-      if (!downloadUrl) throw new Error('URL de téléchargement non disponible');
-      // Try fetch blob for better filename, fallback to direct
-      try {
-        const response = await fetch(downloadUrl, { method: 'GET', mode: 'cors' });
-        if (!response.ok) throw new Error(`Erreur serveur: ${response.status}`);
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
+  // View PDF in a new tab - FIXED to properly open PDFs inline
+  const handleView = () => {
+    setError(null);
+    const url = getFileURL('view');
+    if (url) {
+      // Open in new tab with proper window features for PDF viewing
+      const newWindow = window.open(url, '_blank', 'noopener,noreferrer,width=1200,height=800,scrollbars=yes,resizable=yes');
+      
+      // Fallback: if popup was blocked, try direct navigation
+      if (!newWindow) {
+        // Try alternative method
         const link = document.createElement('a');
         link.href = url;
-        link.download = file.originalName || 'document.pdf';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
-      } catch {
-        // Direct fallback
-        const link = document.createElement('a');
-        link.href = downloadUrl;
         link.target = '_blank';
-        link.download = file.originalName || 'document.pdf';
+        link.rel = 'noopener noreferrer';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
       }
+    } else {
+      setError('URL de visualisation non disponible');
+    }
+  };
+
+  // Download PDF - FIXED to properly download files
+  const handleDownload = async () => {
+    setLoading(true); 
+    setError(null);
+    
+    try {
+      const url = getFileURL('download');
+      if (!url) throw new Error('URL de téléchargement non disponible');
+      
+      // Create a temporary link element to trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.originalName || 'document.pdf';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      
+      // Append to body temporarily
+      document.body.appendChild(link);
+      
+      // Trigger the download
+      link.click();
+      
+      // Clean up
+      document.body.removeChild(link);
+      
+      // Optional: Add a small delay to show loading state
+      setTimeout(() => setLoading(false), 1000);
+      
     } catch (err) {
+      console.error('Download error:', err);
       setError(`Téléchargement impossible: ${err.message}`);
-    } finally {
       setLoading(false);
     }
   };
 
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 Bytes';
-    const k = 1024; const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const k = 1024; 
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
@@ -134,6 +142,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     minHeight: '200px',
     display: 'flex',
     flexDirection: 'column',
+    cursor: 'pointer'
   };
 
   const headerStyles = {
@@ -181,7 +190,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
 
   const buttonBaseStyles = {
     flex: 1,
-    padding: '0.5rem 1rem',
+    padding: '0.75rem 1rem',
     borderRadius: '8px',
     border: 'none',
     fontWeight: '500',
@@ -199,6 +208,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     ...buttonBaseStyles,
     background: theme.gradient,
     color: 'white',
+    boxShadow: `0 4px 15px ${theme.shadow}`,
   };
 
   const downloadButtonStyles = {
@@ -207,6 +217,9 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     color: '#374151',
     border: '1px solid rgba(0,0,0,0.1)',
   };
+
+  // Add hover effects
+  const [hovered, setHovered] = useState({ view: false, download: false });
 
   return (
     <div style={containerStyles}>
@@ -229,18 +242,34 @@ export const FileCard = ({ file, apiBaseUrl }) => {
         )}
         <div style={buttonsContainerStyles}>
           <button
-            style={viewButtonStyles}
+            style={{
+              ...viewButtonStyles,
+              transform: hovered.view ? 'translateY(-2px)' : 'translateY(0)',
+              boxShadow: hovered.view 
+                ? `0 8px 25px ${theme.shadow}` 
+                : `0 4px 15px ${theme.shadow}`,
+            }}
             onClick={handleView}
             disabled={loading}
-            title={`Visualiser ${file.originalName} dans un nouvel onglet`}
+            onMouseEnter={() => setHovered({ ...hovered, view: true })}
+            onMouseLeave={() => setHovered({ ...hovered, view: false })}
+            title={`Ouvrir ${file.originalName} dans un nouvel onglet`}
           >
             <Eye size={18} />
-            {loading ? 'Ouverture...' : 'Visualiser'}
+            {loading ? 'Ouverture...' : 'Ouvrir'}
           </button>
           <button
-            style={downloadButtonStyles}
+            style={{
+              ...downloadButtonStyles,
+              transform: hovered.download ? 'translateY(-2px)' : 'translateY(0)',
+              boxShadow: hovered.download 
+                ? '0 8px 25px rgba(0,0,0,0.15)' 
+                : '0 2px 10px rgba(0,0,0,0.1)',
+            }}
             onClick={handleDownload}
             disabled={loading}
+            onMouseEnter={() => setHovered({ ...hovered, download: true })}
+            onMouseLeave={() => setHovered({ ...hovered, download: false })}
             title={`Télécharger ${file.originalName}`}
           >
             <Download size={18} />
