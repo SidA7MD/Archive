@@ -1602,7 +1602,7 @@ const gracefulShutdown = async (signal) => {
     clearTimeout(reconnectTimeout);
   }
   
-  try {
+  try{
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
       console.log('✅ MongoDB connection closed');
