@@ -368,13 +368,16 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
-    res.json(files.map(file => ({
-      ...file,
-      viewUrl: file.cloudinaryUrl,
-      downloadUrl: file.cloudinaryUrl,
-      storageProvider: 'cloudinary',
-      fileType: getFileExtension(file.originalName)
-    })));
+    res.json({
+      files: files.map(file => ({
+        ...file,
+        viewUrl: `${getBaseURL(req)}/api/files/${file._id}/view`,
+        downloadUrl: `${getBaseURL(req)}/api/files/${file._id}/download`,
+        directCloudinaryUrl: file.cloudinaryUrl, // Keep for fallback
+        storageProvider: 'cloudinary',
+        fileType: getFileExtension(file.originalName)
+      }))
+    }); // ← Ligne corrigée
   } catch (error) {
     console.error('❌ Error fetching files:', error);
     res.status(500).json({ error: 'Erreur lors de la récupération des fichiers' });
@@ -407,8 +410,9 @@ app.get('/api/files', requireDB, async (req, res) => {
     res.json({
       files: files.map(file => ({
         ...file,
-        viewUrl: file.cloudinaryUrl,
-        downloadUrl: file.cloudinaryUrl,
+        viewUrl: `${getBaseURL(req)}/api/files/${file._id}/view`,
+        downloadUrl: `${getBaseURL(req)}/api/files/${file._id}/download`,
+        directCloudinaryUrl: file.cloudinaryUrl, // Keep for fallback
         storageProvider: 'cloudinary',
         fileType: getFileExtension(file.originalName)
       })),
@@ -435,7 +439,7 @@ function getFileExtension(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : 'pdf';
 }
 
-// GET /api/files/:fileId/view - Stream PDF with inline viewing headers (FIXED)
+// GET /api/files/:fileId/view - Stream PDF with inline viewing headers (DEPLOYMENT FIXED)
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   try {
@@ -447,11 +451,20 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
     
-    // Set proper headers for inline PDF viewing
+    // Enhanced headers for deployment environments
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Accept-Ranges', 'bytes');
+    
+    // Additional headers for deployment compatibility
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+    
+    // Force browser to treat as PDF for inline viewing
+    res.setHeader('Content-Transfer-Encoding', 'binary');
     
     // Handle range requests for PDF streaming
     const rangeHeader = req.headers.range;
@@ -469,7 +482,10 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       port: parsedUrl.port,
       path: parsedUrl.path,
       method: 'GET',
-      headers: {}
+      headers: {
+        'User-Agent': 'UniversityArchive/2.3.1',
+        'Accept': 'application/pdf,*/*'
+      }
     };
     
     // Forward range header if present
@@ -478,10 +494,18 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
     }
     
     const request = client.request(requestOptions, (cloudinaryRes) => {
+      // Log response for debugging
+      console.log(`📄 Cloudinary response status: ${cloudinaryRes.statusCode} for file: ${file.originalName}`);
+      
+      // Handle redirects
+      if (cloudinaryRes.statusCode >= 300 && cloudinaryRes.statusCode < 400 && cloudinaryRes.headers.location) {
+        return res.redirect(cloudinaryRes.headers.location);
+      }
+      
       // Forward status code
       res.statusCode = cloudinaryRes.statusCode;
       
-      // Forward relevant headers
+      // Forward relevant headers while maintaining our custom ones
       if (cloudinaryRes.headers['content-length']) {
         res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
       }
@@ -495,8 +519,15 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
         res.setHeader('ETag', cloudinaryRes.headers['etag']);
       }
       
+      // Ensure we maintain our PDF content type
+      res.setHeader('Content-Type', 'application/pdf');
+      
       // Pipe the file data to the response
       cloudinaryRes.pipe(res);
+      
+      cloudinaryRes.on('end', () => {
+        console.log(`✅ PDF streamed successfully: ${file.originalName}`);
+      });
     });
     
     request.on('error', (error) => {
@@ -506,7 +537,7 @@ app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
       }
     });
     
-    request.setTimeout(30000, () => {
+    request.setTimeout(45000, () => {
       request.destroy();
       if (!res.headersSent) {
         res.status(408).json({ error: 'Timeout lors de la visualisation' });
@@ -698,8 +729,9 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       await session.endSession();
       const responseFile = {
         ...savedFile.toObject(),
-        viewUrl: savedFile.cloudinaryUrl,
-        downloadUrl: savedFile.cloudinaryUrl,
+        viewUrl: `${getBaseURL(req)}/api/files/${savedFile._id}/view`,
+        downloadUrl: `${getBaseURL(req)}/api/files/${savedFile._id}/download`,
+        directCloudinaryUrl: savedFile.cloudinaryUrl, // Keep for fallback
         fileType: getFileExtension(req.file.originalname)
       };
       res.status(201).json({ 
@@ -847,8 +879,9 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       .lean();
     res.json(files.map(file => ({
       ...file,
-      viewUrl: file.cloudinaryUrl,
-      downloadUrl: file.cloudinaryUrl,
+      viewUrl: `${getBaseURL(req)}/api/files/${file._id}/view`,
+      downloadUrl: `${getBaseURL(req)}/api/files/${file._id}/download`,
+      directCloudinaryUrl: file.cloudinaryUrl, // Keep for fallback
       storageProvider: 'cloudinary',
       fileType: getFileExtension(file.originalName)
     })));
@@ -946,8 +979,9 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: file.cloudinaryUrl,
-        downloadUrl: file.cloudinaryUrl,
+        viewUrl: `${baseURL}/api/files/${file._id}/view`,
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+        directCloudinaryUrl: file.cloudinaryUrl, // Keep for fallback
         fileType: getFileExtension(file.originalName),
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
