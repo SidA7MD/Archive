@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styles from './AdminPage.module.css';
 
-// Use environment variable or fallback to production URL
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'https://archive-mi73.onrender.com';
 
 export const AdminPage = () => {
@@ -30,16 +29,12 @@ export const AdminPage = () => {
 
   const ADMIN_PASSWORD = 'admin123';
 
-  // Enhanced connection test
   useEffect(() => {
     const testConnection = async () => {
       setConnectionStatus('testing');
       try {
-        console.log('Testing connection to:', API_BASE_URL);
-        
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
-        
         const response = await fetch(`${API_BASE_URL}/api/health`, {
           signal: controller.signal,
           headers: {
@@ -48,25 +43,18 @@ export const AdminPage = () => {
           },
           mode: 'cors'
         });
-        
         clearTimeout(timeoutId);
-        
         if (response.ok) {
           const data = await response.json();
-          console.log('Backend connection successful:', data);
           setConnectionStatus('connected');
-          
           if (data.status === 'Warning') {
             setMessage(`Avertissement serveur: ${data.message}`);
           }
         } else {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        
       } catch (error) {
-        console.error('Backend connection failed:', error);
         setConnectionStatus('failed');
-        
         if (error.name === 'AbortError') {
           setMessage('Timeout de connexion au serveur (15s)');
         } else if (error.message.includes('CORS')) {
@@ -76,11 +64,9 @@ export const AdminPage = () => {
         }
       }
     };
-    
     testConnection();
   }, []);
 
-  // Auth functions
   const handleLogin = (e) => {
     e.preventDefault();
     if (password === ADMIN_PASSWORD) {
@@ -109,7 +95,6 @@ export const AdminPage = () => {
     setFiles([]);
   };
 
-  // Load data on tab change
   useEffect(() => {
     if (isAuthenticated && connectionStatus === 'connected') {
       if (activeTab === 'manage') loadFiles();
@@ -117,11 +102,9 @@ export const AdminPage = () => {
     }
   }, [isAuthenticated, activeTab, connectionStatus]);
 
-  // API functions
   const makeApiRequest = async (url, options = {}) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-    
     try {
       const response = await fetch(`${API_BASE_URL}${url}`, {
         ...options,
@@ -132,20 +115,15 @@ export const AdminPage = () => {
         },
         mode: 'cors'
       });
-      
       clearTimeout(timeoutId);
-      
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (e) {
-          // Response isn't JSON
-        }
+        } catch (e) {}
         throw new Error(errorMessage);
       }
-      
       return await response.json();
     } catch (error) {
       clearTimeout(timeoutId);
@@ -159,7 +137,6 @@ export const AdminPage = () => {
       const data = await makeApiRequest('/api/admin/files');
       setFiles(data);
     } catch (error) {
-      console.error('Error loading files:', error);
       setMessage('Erreur chargement fichiers: ' + error.message);
     } finally {
       setLoading(false);
@@ -170,12 +147,9 @@ export const AdminPage = () => {
     try {
       const data = await makeApiRequest('/api/admin/stats');
       setStats(data);
-    } catch (error) {
-      console.error('Error loading stats:', error);
-    }
+    } catch (error) {}
   };
 
-  // Form handlers
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -186,92 +160,61 @@ export const AdminPage = () => {
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    console.log('File selected:', file?.name, file?.size);
     setFormData(prev => ({
       ...prev,
       pdf: file
     }));
   };
 
-  // Upload handler
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
     if (connectionStatus !== 'connected') {
       setMessage('Serveur non disponible. Veuillez attendre la connexion.');
       return;
     }
-    
     const fileInput = document.getElementById('pdf-input');
     const selectedFile = formData.pdf || fileInput?.files[0];
-    
-    // Validation
     if (!formData.semester || !formData.type || !formData.subject.trim() || 
         !formData.year.trim() || !selectedFile) {
       setMessage('Veuillez remplir tous les champs et sélectionner un fichier PDF.');
       return;
     }
-
     if (selectedFile.type !== 'application/pdf') {
       setMessage('Veuillez sélectionner un fichier PDF valide.');
       return;
     }
-
     if (selectedFile.size > 50 * 1024 * 1024) {
       setMessage('Fichier trop volumineux (max 50MB).');
       return;
     }
-
     setUploading(true);
     setMessage('');
-
     const uploadData = new FormData();
     uploadData.append('semester', formData.semester);
     uploadData.append('type', formData.type);
     uploadData.append('subject', formData.subject);
     uploadData.append('year', formData.year);
     uploadData.append('pdf', selectedFile);
-
-    console.log('Uploading:', {
-      semester: formData.semester,
-      type: formData.type,
-      subject: formData.subject,
-      year: formData.year,
-      fileName: selectedFile.name,
-      fileSize: selectedFile.size
-    });
-
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for uploads
-      
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
       const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
         body: uploadData,
         signal: controller.signal,
         mode: 'cors'
-        // Don't set Content-Type - browser will set multipart/form-data with boundary
       });
-
       clearTimeout(timeoutId);
-      
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}`;
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (e) {
-          // Response isn't JSON
-        }
+        } catch (e) {}
         throw new Error(errorMessage);
       }
-      
       const result = await response.json();
-      console.log('Upload successful:', result);
-      
       setMessage('Fichier uploadé avec succès!');
-      
-      // Reset form
       setFormData({
         semester: 'S1',
         type: 'cours',
@@ -279,17 +222,11 @@ export const AdminPage = () => {
         year: '',
         pdf: null
       });
-      
       const fileInputElement = document.getElementById('pdf-input');
       if (fileInputElement) fileInputElement.value = '';
-      
-      // Refresh data
       if (activeTab === 'manage') loadFiles();
       if (activeTab === 'stats') loadStats();
-      
     } catch (error) {
-      console.error('Upload error:', error);
-      
       if (error.name === 'AbortError') {
         setMessage('Upload timeout (60s). Veuillez réessayer avec un fichier plus petit.');
       } else {
@@ -300,7 +237,6 @@ export const AdminPage = () => {
     }
   };
 
-  // Edit handlers
   const startEditing = (file) => {
     setEditingFile({
       ...file,
@@ -316,7 +252,6 @@ export const AdminPage = () => {
 
   const saveEdit = async () => {
     if (!editingFile) return;
-    
     try {
       await makeApiRequest(`/api/files/${editingFile._id}`, {
         method: 'PUT',
@@ -329,7 +264,6 @@ export const AdminPage = () => {
           year: editingFile.year
         })
       });
-      
       setMessage('Fichier mis à jour avec succès!');
       setEditingFile(null);
       loadFiles();
@@ -338,18 +272,15 @@ export const AdminPage = () => {
     }
   };
 
-  // Delete handlers
   const confirmDelete = (file) => setDeleteConfirm(file);
   const cancelDelete = () => setDeleteConfirm(null);
 
   const deleteFile = async () => {
     if (!deleteConfirm) return;
-    
     try {
       await makeApiRequest(`/api/files/${deleteConfirm._id}`, {
         method: 'DELETE'
       });
-      
       setMessage('Fichier supprimé avec succès!');
       setDeleteConfirm(null);
       loadFiles();
@@ -359,22 +290,17 @@ export const AdminPage = () => {
     }
   };
 
-  // Filter files
   const filteredFiles = files.filter(file => {
     const matchesSearch = file.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (file.subject?.name && file.subject.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (file.subject && typeof file.subject === 'string' && file.subject.toLowerCase().includes(searchTerm.toLowerCase()));
-    
     const fileSemester = file.semester?.name || file.semester;
     const matchesSemester = !filterSemester || fileSemester === filterSemester;
-    
     const fileType = file.type?.name || file.type;
     const matchesType = !filterType || fileType === filterType;
-    
     return matchesSearch && matchesSemester && matchesType;
   });
 
-  // Utility functions
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -411,7 +337,6 @@ export const AdminPage = () => {
     }
   };
 
-  // Login page
   if (!isAuthenticated) {
     return (
       <div className={styles.loginPage}>
@@ -468,7 +393,6 @@ export const AdminPage = () => {
     );
   }
 
-  // Main admin interface
   return (
     <div className={styles.adminPage}>
       <div className={styles.adminContainer}>
@@ -489,8 +413,6 @@ export const AdminPage = () => {
             </button>
           </div>
         </div>
-
-        {/* Tab Navigation */}
         <div className={styles.tabNav}>
           <button
             className={`${styles.tabButton} ${activeTab === 'upload' ? styles.active : ''}`}
@@ -513,8 +435,6 @@ export const AdminPage = () => {
             Statistiques
           </button>
         </div>
-
-        {/* Upload Tab */}
         {activeTab === 'upload' && (
           <div>
             {connectionStatus !== 'connected' && (
@@ -617,8 +537,6 @@ export const AdminPage = () => {
             </form>
           </div>
         )}
-
-        {/* Manage Files Tab */}
         {activeTab === 'manage' && (
           <div className={styles.manageSection}>
             <div className={styles.filtersSection}>
@@ -654,7 +572,6 @@ export const AdminPage = () => {
                 {loading ? 'Chargement...' : 'Actualiser'}
               </button>
             </div>
-
             {loading ? (
               <div className={styles.loading}>Chargement...</div>
             ) : (
@@ -780,12 +697,19 @@ export const AdminPage = () => {
                               <>
                                 <button onClick={() => startEditing(file)} className={styles.editButton} title="Modifier">✏️</button>
                                 <a
-                                  href={`${API_BASE_URL}/api/files/${file._id}/view`}
+                                  href={file.viewUrl || file.cloudinaryUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className={styles.viewButton}
                                   title="Voir le fichier"
                                 >👁️</a>
+                                <a
+                                  href={file.downloadUrl || file.cloudinaryUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={styles.downloadButton}
+                                  title="Télécharger"
+                                >⬇️</a>
                                 <button onClick={() => confirmDelete(file)} className={styles.deleteButton} title="Supprimer">🗑️</button>
                               </>
                             )}
@@ -799,8 +723,6 @@ export const AdminPage = () => {
             )}
           </div>
         )}
-
-        {/* Stats Tab */}
         {activeTab === 'stats' && (
           <div className={styles.statsSection}>
             {stats ? (
@@ -821,7 +743,6 @@ export const AdminPage = () => {
                   <h3>Taille Totale</h3>
                   <div className={styles.statNumber}>{stats.overview?.totalSizeFormatted || '0 Bytes'}</div>
                 </div>
-                
                 {stats.filesByType && stats.filesByType.length > 0 && (
                   <div className={`${styles.statCard} ${styles.fullWidth}`}>
                     <h3>Fichiers par Type</h3>
@@ -835,7 +756,6 @@ export const AdminPage = () => {
                     </div>
                   </div>
                 )}
-
                 {stats.filesBySemester && stats.filesBySemester.length > 0 && (
                   <div className={`${styles.statCard} ${styles.fullWidth}`}>
                     <h3>Fichiers par Semestre</h3>
@@ -849,13 +769,12 @@ export const AdminPage = () => {
                     </div>
                   </div>
                 )}
-
                 {stats.storageProvider && (
                   <div className={`${styles.statCard} ${styles.fullWidth}`}>
                     <h3>Stockage</h3>
                     <div className={styles.storageInfo}>
                       <p><strong>Provider:</strong> {stats.storageProvider}</p>
-                      <p><strong>Location:</strong> {stats.storageLocation}</p>
+                      <p><strong>Location:</strong> {stats.storageLocation || 'Cloudinary'}</p>
                     </div>
                   </div>
                 )}
@@ -865,8 +784,6 @@ export const AdminPage = () => {
             )}
           </div>
         )}
-
-        {/* Delete Confirmation Modal */}
         {deleteConfirm && (
           <div className={styles.modalOverlay}>
             <div className={styles.modal}>
@@ -880,8 +797,6 @@ export const AdminPage = () => {
             </div>
           </div>
         )}
-
-        {/* Message Display */}
         {message && (
           <div className={message.includes('succès') ? styles.successMessage : styles.errorMessage}>
             {message}

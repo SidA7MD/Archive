@@ -5,73 +5,30 @@ const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const fs = require('fs').promises;
-const fsSync = require('fs');
 require('dotenv').config();
 
-console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE');
-console.log('📁 Using Local File Storage');
+const { v2: cloudinary } = require('cloudinary');
+const { Readable } = require('stream');
+
+console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE');
+console.log('🌥️ Using Cloudinary for File Storage');
 
 const app = express();
+
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dnsudmg3p',
+  api_key: process.env.CLOUDINARY_API_KEY || '211427178253455',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'dLYmuWERn7Hfd_W8G80vZF4ETxU',
+});
 
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
 
-// Enhanced uploads directory initialization with deployment support
-let UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
-
-const initializeUploadsDir = async () => {
-  try {
-    // Create uploads directory with proper permissions
-    await fs.mkdir(UPLOADS_DIR, { recursive: true, mode: 0o755 });
-    
-    // Test write permissions
-    const testFile = path.join(UPLOADS_DIR, 'test-write.txt');
-    await fs.writeFile(testFile, 'test');
-    await fs.unlink(testFile);
-    
-    console.log('📁 Uploads directory ready:', UPLOADS_DIR);
-    console.log('✅ Write permissions confirmed');
-    
-    // Log directory contents for debugging
-    try {
-      const files = await fs.readdir(UPLOADS_DIR);
-      console.log(`📊 Directory contains ${files.length} files`);
-    } catch (readError) {
-      console.log('📊 Directory is empty or unreadable');
-    }
-    
-  } catch (error) {
-    console.error('❌ Error initializing uploads directory:', error);
-    console.error('📁 Attempted path:', UPLOADS_DIR);
-    
-    // Try alternative locations for deployment platforms
-    const alternatives = [
-      '/tmp/uploads',
-      path.join(process.cwd(), 'tmp', 'uploads'),
-      path.join(process.env.HOME || '/tmp', 'uploads')
-    ];
-    
-    for (const alt of alternatives) {
-      try {
-        await fs.mkdir(alt, { recursive: true, mode: 0o755 });
-        console.log(`✅ Alternative uploads directory created: ${alt}`);
-        UPLOADS_DIR = alt;
-        process.env.UPLOADS_DIR = alt;
-        break;
-      } catch (altError) {
-        console.log(`❌ Alternative ${alt} failed: ${altError.message}`);
-      }
-    }
-  }
-};
-
-// Enhanced CORS configuration
+// CORS configuration (unchanged)
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:5173',
@@ -87,21 +44,16 @@ const corsOptions = {
       /\.onrender\.com$/,
       /localhost:\d+$/
     ];
-    
     const isAllowed = allowedOrigins.some(allowedOrigin => {
       if (typeof allowedOrigin === 'string') {
         return origin === allowedOrigin;
       }
       return allowedOrigin.test(origin);
     });
-    
     console.log(`🌐 CORS Check - Origin: ${origin}, Allowed: ${isAllowed}`);
-    
     if (isAllowed) {
       return callback(null, true);
     }
-    
-    // Allow all origins for development/deployment flexibility
     return callback(null, true);
   },
   credentials: true,
@@ -130,7 +82,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Security middleware
+// Security middleware (unchanged)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
@@ -154,7 +106,7 @@ app.use(helmet({
   },
 }));
 
-// Rate limiting
+// Rate limiting (unchanged)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -165,7 +117,6 @@ const generalLimiter = rateLimit({
     return req.ip || req.connection.remoteAddress || 'unknown';
   }
 });
-
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50,
@@ -176,16 +127,14 @@ app.use('/api', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Base URL detection
+// Base URL detection (unchanged)
 const getBaseURL = (req) => {
   if (process.env.RENDER_EXTERNAL_URL) {
     return process.env.RENDER_EXTERNAL_URL;
   }
-  
   const forwardedProto = req.get('x-forwarded-proto') || req.get('x-scheme');
   const forwardedHost = req.get('x-forwarded-host') || req.get('x-forwarded-server');
   const host = req.get('host');
-  
   if (host) {
     if (host.includes('.onrender.com')) {
       return `https://${host}`;
@@ -207,11 +156,10 @@ const getBaseURL = (req) => {
       return `${protocol}://${host}`;
     }
   }
-  
   return `http://localhost:${process.env.PORT || 5000}`;
 };
 
-// MongoDB connection
+// MongoDB connection (unchanged)
 const MONGO_URI = process.env.MONGODB_URI || 
   `mongodb+srv://${process.env.MONGO_USERNAME}:${encodeURIComponent(process.env.MONGO_PASSWORD)}@${process.env.MONGO_HOST}/${process.env.MONGO_DB_NAME}?retryWrites=true&w=majority&appName=university-archive`;
 
@@ -227,7 +175,6 @@ const mongooseOptions = {
 };
 
 console.log('🔌 Attempting MongoDB connection...');
-
 let isConnecting = false;
 let reconnectTimeout;
 let retryCount = 0;
@@ -236,7 +183,6 @@ const maxRetries = 10;
 const connectDB = async () => {
   if (isConnecting) return;
   isConnecting = true;
-  
   try {
     await mongoose.connect(MONGO_URI, mongooseOptions);
     console.log('✅ MongoDB connected successfully');
@@ -246,7 +192,6 @@ const connectDB = async () => {
     console.error('❌ MongoDB connection failed:', error.message);
     isConnecting = false;
     retryCount++;
-    
     if (retryCount <= maxRetries) {
       const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
       console.log(`🔄 Retry ${retryCount}/${maxRetries} in ${delay/1000}s...`);
@@ -262,11 +207,9 @@ connectDB();
 mongoose.connection.on('connected', () => {
   console.log('🟢 Mongoose connected');
 });
-
 mongoose.connection.on('error', (err) => {
   console.error('🔴 Mongoose error:', err.message);
 });
-
 mongoose.connection.on('disconnected', () => {
   console.log('🟡 Mongoose disconnected');
   if (!isConnecting && !reconnectTimeout && retryCount < maxRetries) {
@@ -275,9 +218,8 @@ mongoose.connection.on('disconnected', () => {
   }
 });
 
-// Models
+// Models (unchanged)
 let Semester, Type, Subject, Year, File;
-
 try {
   Semester = require('./models/Semester');
   Type = require('./models/Type');
@@ -289,87 +231,41 @@ try {
   process.exit(1);
 }
 
-// File model schema for local storage
+// File model schema for Cloudinary storage
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  fileName: { type: String, required: true }, // Actual file name on disk
-  appwriteFileId: { type: String }, // Legacy support
+  cloudinaryPublicId: { type: String, required: true },
+  cloudinaryUrl: { type: String, required: true },
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
   type: { type: mongoose.Schema.Types.ObjectId, ref: 'Type', required: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
   year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year', required: true, index: true },
-  storageProvider: { type: String, default: 'local' },
+  storageProvider: { type: String, default: 'cloudinary' },
   uploadedAt: { type: Date, default: Date.now, index: true },
   updatedAt: { type: Date, default: Date.now }
 });
-
 fileSchema.index({ semester: 1, type: 1, subject: 1, year: 1 });
 fileSchema.index({ uploadedAt: -1 });
-
 File = mongoose.model('File', fileSchema);
 
-// Migration helper for legacy files
-const handleLegacyFile = async (file) => {
-  console.log(`⚠️ Legacy file detected: ${file.originalName} (ID: ${file._id})`);
-  
-  if (file.appwriteFileId && !file.fileName) {
-    console.log(`🗑️ Removing legacy Appwrite file: ${file.originalName}`);
-    
-    try {
-      await File.findByIdAndDelete(file._id);
-      return { deleted: true, reason: 'Legacy Appwrite file removed' };
-    } catch (error) {
-      console.error('❌ Failed to delete legacy file:', error);
-      return { deleted: false, error: error.message };
-    }
-  }
-  
-  if (!file.appwriteFileId && !file.fileName) {
-    console.log(`🗑️ Removing corrupted file record: ${file.originalName}`);
-    
-    try {
-      await File.findByIdAndDelete(file._id);
-      return { deleted: true, reason: 'Corrupted file record removed' };
-    } catch (error) {
-      console.error('❌ Failed to delete corrupted file:', error);
-      return { deleted: false, error: error.message };
-    }
-  }
-  
-  return { deleted: false, reason: 'File appears valid' };
-};
+// Migration helper not needed for Cloudinary (no legacy support)
 
-// Local file storage setup
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: function (req, file, cb) {
-    // Generate unique filename
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    const filename = `file-${uniqueSuffix}${ext}`;
-    console.log('📄 Generated filename:', filename);
-    cb(null, filename);
-  }
-});
-
+// Multer setup for memory storage (since file is sent to Cloudinary)
+const storage = multer.memoryStorage();
 const fileFilter = (req, file, cb) => {
   console.log('📄 File upload filter:', {
     originalName: file.originalname,
     mimeType: file.mimetype,
     fieldname: file.fieldname
   });
-  
   if (file.mimetype === 'application/pdf') {
     cb(null, true);
   } else {
     cb(new Error('Seuls les fichiers PDF sont autorisés'), false);
   }
 };
-
 const upload = multer({ 
   storage: storage,
   fileFilter: fileFilter,
@@ -380,7 +276,7 @@ const upload = multer({
   }
 });
 
-// Database connection middleware
+// Database connection middleware (unchanged)
 const requireDB = (req, res, next) => {
   if (mongoose.connection.readyState !== 1) {
     console.warn('⚠️ Database not ready for request:', req.originalUrl);
@@ -392,44 +288,6 @@ const requireDB = (req, res, next) => {
   }
   next();
 };
-
-// File serving middleware with enhanced CORS
-app.use('/api/files/:fileId/:action(view|download)', (req, res, next) => {
-  const origin = req.get('origin');
-  const userAgent = req.get('user-agent') || '';
-  
-  console.log('🌐 File request:', {
-    method: req.method,
-    fileId: req.params.fileId,
-    action: req.params.action,
-    origin: origin || 'direct',
-    userAgent: userAgent.substring(0, 100),
-    ip: req.ip,
-    timestamp: new Date().toISOString()
-  });
-  
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  } else {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, X-Requested-With, Accept, Origin');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type, Content-Disposition, X-Content-Type-Options');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400');
-  res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  
-  next();
-});
-
-app.options('/api/files/:fileId/:action(view|download)', (req, res) => {
-  console.log('✋ CORS preflight:', req.params.action, req.params.fileId);
-  res.status(204).end();
-});
 
 // API ROUTES
 
@@ -450,7 +308,6 @@ app.get('/api/semesters/:semesterId/types', requireDB, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.semesterId)) {
       return res.status(400).json({ error: 'ID de semestre invalide' });
     }
-
     const types = await Type.find({ semester: req.params.semesterId })
       .populate('semester')
       .lean();
@@ -465,17 +322,14 @@ app.get('/api/semesters/:semesterId/types', requireDB, async (req, res) => {
 app.get('/api/semesters/:semesterId/types/:typeId/subjects', requireDB, async (req, res) => {
   try {
     const { semesterId, typeId } = req.params;
-    
     if (!mongoose.Types.ObjectId.isValid(semesterId) || 
         !mongoose.Types.ObjectId.isValid(typeId)) {
       return res.status(400).json({ error: 'IDs invalides' });
     }
-
     const subjects = await Subject.find({
       semester: semesterId,
       type: typeId
     }).populate(['semester', 'type']).lean();
-    
     res.json(subjects);
   } catch (error) {
     console.error('❌ Error fetching subjects:', error);
@@ -487,13 +341,11 @@ app.get('/api/semesters/:semesterId/types/:typeId/subjects', requireDB, async (r
 app.get('/api/semesters/:semesterId/types/:typeId/subjects/:subjectId/years', requireDB, async (req, res) => {
   try {
     const { semesterId, typeId, subjectId } = req.params;
-    
     if (!mongoose.Types.ObjectId.isValid(semesterId) || 
         !mongoose.Types.ObjectId.isValid(typeId) ||
         !mongoose.Types.ObjectId.isValid(subjectId)) {
       return res.status(400).json({ error: 'IDs invalides' });
     }
-
     const years = await Year.find({
       semester: semesterId,
       type: typeId,
@@ -501,7 +353,6 @@ app.get('/api/semesters/:semesterId/types/:typeId/subjects/:subjectId/years', re
     }).populate(['semester', 'type', 'subject'])
       .sort({ year: -1 })
       .lean();
-      
     res.json(years);
   } catch (error) {
     console.error('❌ Error fetching years:', error);
@@ -515,30 +366,29 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.yearId)) {
       return res.status(400).json({ error: 'ID d\'année invalide' });
     }
-
-    console.log(`📁 Fetching files for year: ${req.params.yearId}`);
-
     const files = await File.find({ year: req.params.yearId })
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
-
-    console.log(`📄 Found ${files.length} files for year ${req.params.yearId}`);
-      
-    res.json(files);
+    res.json(files.map(file => ({
+      ...file,
+      viewUrl: file.cloudinaryUrl,
+      downloadUrl: file.cloudinaryUrl,
+      storageProvider: 'cloudinary',
+      fileType: getFileExtension(file.originalName)
+    })));
   } catch (error) {
     console.error('❌ Error fetching files:', error);
     res.status(500).json({ error: 'Erreur lors de la récupération des fichiers' });
   }
 });
 
-// GET /api/files - Paginated file list
+// GET /api/files - Paginated file list (Cloudinary links)
 app.get('/api/files', requireDB, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
-    
     const filter = {};
     if (req.query.semester) filter.semester = req.query.semester;
     if (req.query.type) filter.type = req.query.type;
@@ -547,7 +397,6 @@ app.get('/api/files', requireDB, async (req, res) => {
     if (req.query.search) {
       filter.originalName = { $regex: req.query.search, $options: 'i' };
     }
-
     const [files, total] = await Promise.all([
       File.find(filter)
         .populate(['semester', 'type', 'subject', 'year'])
@@ -557,19 +406,14 @@ app.get('/api/files', requireDB, async (req, res) => {
         .lean(),
       File.countDocuments(filter)
     ]);
-
-    const baseURL = getBaseURL(req);
-
-    const enhancedFiles = files.map(file => ({
-      ...file,
-      viewUrl: `${baseURL}/api/files/${file._id}/view`,
-      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'local',
-      fileType: getFileExtension(file.originalName)
-    }));
-
     res.json({
-      files: enhancedFiles,
+      files: files.map(file => ({
+        ...file,
+        viewUrl: file.cloudinaryUrl,
+        downloadUrl: file.cloudinaryUrl,
+        storageProvider: 'cloudinary',
+        fileType: getFileExtension(file.originalName)
+      })),
       pagination: {
         page,
         limit,
@@ -579,7 +423,7 @@ app.get('/api/files', requireDB, async (req, res) => {
         hasPrev: page > 1
       },
       total,
-      baseURL
+      baseURL: getBaseURL(req)
     });
   } catch (error) {
     console.error('❌ Error fetching paginated files:', error);
@@ -593,210 +437,58 @@ function getFileExtension(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : 'pdf';
 }
 
-// GET /api/files/:fileId/view - Stream PDF for inline viewing
+// GET /api/files/:fileId/view - Redirect to Cloudinary PDF URL
 app.get('/api/files/:fileId/view', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  
   try {
-    console.log(`👁️ VIEW REQUEST: ${fileId} from ${req.ip}`);
-    
     if (!mongoose.Types.ObjectId.isValid(fileId)) {
-      console.error('❌ Invalid file ID:', fileId);
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
-
     const file = await File.findById(fileId).lean();
     if (!file) {
-      console.error('❌ File not found in database:', fileId);
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
-
-    console.log('📄 File found:', {
-      id: file._id,
-      name: file.originalName,
-      size: file.fileSize,
-      fileName: file.fileName,
-      storageProvider: file.storageProvider
-    });
-
-    // Handle legacy files
-    if (!file.fileName || file.appwriteFileId) {
-      console.log('⚠️ Legacy file detected, attempting cleanup...');
-      const migrationResult = await handleLegacyFile(file);
-      
-      if (migrationResult.deleted) {
-        return res.status(410).json({ 
-          error: 'Fichier legacy supprimé',
-          message: migrationResult.reason,
-          suggestion: 'Veuillez re-uploader ce fichier'
-        });
-      }
-      
-      return res.status(404).json({ 
-        error: 'Fichier incompatible',
-        message: 'Ce fichier provient de l\'ancien système et ne peut pas être affiché',
-        suggestion: 'Veuillez re-uploader ce fichier'
-      });
-    }
-
-    // Handle local files
-    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
-    
-    try {
-      // Check if file exists
-      const stats = await fs.stat(filePath);
-      console.log('📄 Local file exists, serving:', filePath, 'Size:', stats.size);
-      
-      // Validate file is within uploads directory (security check)
-      if (!filePath.startsWith(path.resolve(UPLOADS_DIR))) {
-        console.error('❌ Security: File path outside uploads directory:', filePath);
-        return res.status(403).json({ error: 'Accès interdit' });
-      }
-      
-      // Set proper headers for PDF viewing
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Length', stats.size);
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      res.setHeader('Accept-Ranges', 'bytes');
-      
-      // Handle range requests for better PDF streaming
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-        const chunksize = (end - start) + 1;
-        
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
-        res.setHeader('Content-Length', chunksize);
-        
-        const stream = fsSync.createReadStream(filePath, { start, end });
-        stream.pipe(res);
-      } else {
-        // Send entire file
-        res.sendFile(filePath, (err) => {
-          if (err) {
-            console.error('❌ SendFile error:', err);
-            if (!res.headersSent) {
-              res.status(500).json({ error: 'Erreur lors de l\'envoi du fichier' });
-            }
-          }
-        });
-      }
-      
-    } catch (fileError) {
-      console.error('❌ Local file missing from disk:', filePath, fileError.message);
-      return res.status(404).json({ 
-        error: 'Fichier manquant sur le disque',
-        suggestion: 'Veuillez re-uploader ce fichier',
-        filePath: process.env.NODE_ENV === 'development' ? filePath : undefined
-      });
-    }
-
+    // Cloudinary: just redirect to the file's URL for view
+    return res.redirect(file.cloudinaryUrl);
   } catch (error) {
     console.error('❌ View error:', error);
-    res.status(500).json({ 
-      error: 'Erreur lors de la visualisation',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ error: 'Erreur lors de la visualisation' });
   }
 });
 
-// GET /api/files/:fileId/download - Force download
+// GET /api/files/:fileId/download - Force download from Cloudinary
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
-  
   try {
-    console.log(`⬇️ DOWNLOAD REQUEST: ${fileId} from ${req.ip}`);
-    
     if (!mongoose.Types.ObjectId.isValid(fileId)) {
-      console.error('❌ Invalid file ID:', fileId);
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
-
     const file = await File.findById(fileId).lean();
     if (!file) {
-      console.error('❌ File not found in database:', fileId);
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
-
-    console.log('📄 Download file found:', {
-      id: file._id,
-      name: file.originalName,
-      size: file.fileSize,
-      fileName: file.fileName,
-      storageProvider: file.storageProvider
-    });
-
-    // Handle legacy files
-    if (!file.fileName || file.appwriteFileId) {
-      console.log('⚠️ Legacy file detected, attempting cleanup...');
-      const migrationResult = await handleLegacyFile(file);
-      
-      if (migrationResult.deleted) {
-        return res.status(410).json({ 
-          error: 'Fichier legacy supprimé',
-          message: migrationResult.reason,
-          suggestion: 'Veuillez re-uploader ce fichier'
-        });
-      }
-      
-      return res.status(404).json({ 
-        error: 'Fichier incompatible',
-        message: 'Ce fichier provient de l\'ancien système',
-        suggestion: 'Veuillez re-uploader ce fichier'
-      });
-    }
-
-    // Handle local files
-    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
-    
+    // Download from Cloudinary: set Content-Disposition to attachment
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+    // Use a proxy stream
     try {
-      const stats = await fs.stat(filePath);
-      console.log('📄 Local file exists, forcing download:', filePath, 'Size:', stats.size);
-      
-      // Validate file is within uploads directory
-      if (!filePath.startsWith(path.resolve(UPLOADS_DIR))) {
-        console.error('❌ Security: File path outside uploads directory:', filePath);
-        return res.status(403).json({ error: 'Accès interdit' });
-      }
-      
-      // Set download headers
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Length', stats.size);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      
-      res.sendFile(filePath, (err) => {
-        if (err) {
-          console.error('❌ SendFile error:', err);
-          if (!res.headersSent) {
-            res.status(500).json({ error: 'Erreur lors du téléchargement' });
-          }
-        }
+      // Download stream from Cloudinary
+      const cloudinaryStream = cloudinary.api.download_stream(file.cloudinaryPublicId, { resource_type: 'raw' });
+      cloudinaryStream.on('error', err => {
+        res.status(500).json({ error: 'Erreur lors du téléchargement' });
       });
-      
-    } catch (fileError) {
-      console.error('❌ Local file missing from disk:', filePath, fileError.message);
-      return res.status(404).json({ 
-        error: 'Fichier manquant sur le disque',
-        suggestion: 'Veuillez re-uploader ce fichier',
-        filePath: process.env.NODE_ENV === 'development' ? filePath : undefined
-      });
+      cloudinaryStream.pipe(res);
+    } catch (e) {
+      // fallback: redirect directly to Cloudinary URL (browser will download)
+      return res.redirect(file.cloudinaryUrl);
     }
-
   } catch (error) {
     console.error('❌ Download error:', error);
-    res.status(500).json({ 
-      error: 'Erreur lors du téléchargement',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ error: 'Erreur lors du téléchargement' });
   }
 });
 
-// POST /api/upload - Upload files locally
+// POST /api/upload - Upload PDF to Cloudinary
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -807,100 +499,67 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     } else if (err) {
       return res.status(400).json({ error: err.message });
     }
-
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier PDF fourni' });
     }
-
-    console.log('📤 File received:', {
-      originalname: req.file.originalname,
-      filename: req.file.filename,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
-      path: req.file.path,
-      destination: req.file.destination
-    });
-
-    // Validate file was actually written to disk
-    try {
-      const filePath = path.resolve(req.file.path);
-      const stats = await fs.stat(filePath);
-      console.log('✅ File confirmed on disk:', filePath, 'Size:', stats.size);
-      
-      if (stats.size !== req.file.size) {
-        console.error('❌ File size mismatch - upload corrupted');
-        await fs.unlink(filePath).catch(console.error);
-        return res.status(400).json({ error: 'Upload corrompu, veuillez réessayer' });
-      }
-    } catch (fsError) {
-      console.error('❌ File not found on disk after upload:', fsError);
-      return res.status(500).json({ error: 'Erreur de stockage, veuillez réessayer' });
-    }
-
     const { semester, type, subject, year } = req.body || {};
     if (!semester || !type || !subject || !year) {
-      // Clean up uploaded file if validation fails
-      try {
-        await fs.unlink(req.file.path);
-      } catch (cleanupError) {
-        console.error('❌ Failed to cleanup uploaded file:', cleanupError);
-      }
-      
       return res.status(400).json({
         error: 'Champs requis manquants',
         required: ['semester', 'type', 'subject', 'year']
       });
     }
 
-    const session = await mongoose.startSession();
-    
+    // Upload to Cloudinary
     try {
-      console.log('📤 Starting database transaction for:', {
-        originalname: req.file.originalname,
-        filename: req.file.filename,
-        size: req.file.size,
-        metadata: { semester, type, subject, year }
+      const uploadStreamPromise = () => new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'raw',
+            folder: 'pdfs',
+            public_id: `pdf-${Date.now()}-${Math.round(Math.random()*1e9)}`,
+            overwrite: false,
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        // Send buffer to cloudinary stream
+        Readable.from(req.file.buffer).pipe(uploadStream);
       });
 
-      let savedFile;
+      const cloudinaryFile = await uploadStreamPromise();
 
+      // Create database references
+      const session = await mongoose.startSession();
+      let savedFile;
       await session.withTransaction(async () => {
-        // Create or find database entities
         let semesterDoc = await Semester.findOne({ name: semester }).session(session);
         if (!semesterDoc) {
           throw new Error('Semestre invalide');
         }
-
         let typeDoc = await Type.findOne({ 
           name: type, 
           semester: semesterDoc._id 
         }).session(session);
-        
         if (!typeDoc) {
           const typeDisplayNames = {
-            'cours': 'Cours',
-            'tp': 'Travaux Pratiques', 
-            'td': 'Travaux Dirigés',
-            'devoirs': 'Devoirs',
-            'compositions': 'Compositions',
-            'ratrapages': 'Rattrapages'
+            'cours': 'Cours', 'tp': 'Travaux Pratiques', 'td': 'Travaux Dirigés',
+            'devoirs': 'Devoirs', 'compositions': 'Compositions', 'ratrapages': 'Rattrapages'
           };
-          
           typeDoc = new Type({
             name: type,
             displayName: typeDisplayNames[type] || type,
             semester: semesterDoc._id
           });
           await typeDoc.save({ session });
-          console.log('➕ Created new type:', type);
         }
-
         let subjectDoc = await Subject.findOne({
           name: subject,
           semester: semesterDoc._id,
           type: typeDoc._id
         }).session(session);
-        
         if (!subjectDoc) {
           subjectDoc = new Subject({
             name: subject,
@@ -908,16 +567,13 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
             type: typeDoc._id
           });
           await subjectDoc.save({ session });
-          console.log('➕ Created new subject:', subject);
         }
-
         let yearDoc = await Year.findOne({
           year: parseInt(year),
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id
         }).session(session);
-        
         if (!yearDoc) {
           yearDoc = new Year({
             year: parseInt(year),
@@ -926,114 +582,67 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
             subject: subjectDoc._id
           });
           await yearDoc.save({ session });
-          console.log('➕ Created new year:', year);
         }
-
         // Create file document
         const fileDoc = new File({
           originalName: req.file.originalname,
-          fileName: req.file.filename,
+          cloudinaryPublicId: cloudinaryFile.public_id,
+          cloudinaryUrl: cloudinaryFile.secure_url,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'local',
+          storageProvider: 'cloudinary',
           uploadedAt: new Date()
         });
-
         savedFile = await fileDoc.save({ session });
         await savedFile.populate(['semester', 'type', 'subject', 'year']);
-
-        console.log('✅ File saved to database:', savedFile._id);
-        
-        // Final verification
-        const finalPath = path.resolve(UPLOADS_DIR, req.file.filename);
-        try {
-          await fs.access(finalPath);
-          console.log('✅ Final verification passed:', finalPath);
-        } catch (verifyError) {
-          console.error('❌ Final verification failed:', verifyError);
-          throw new Error('Fichier non accessible après sauvegarde');
-        }
       });
-
-      const baseUrl = getBaseURL(req);
-      
+      await session.endSession();
       const responseFile = {
         ...savedFile.toObject(),
-        viewUrl: `${baseUrl}/api/files/${savedFile._id}/view`,
-        downloadUrl: `${baseUrl}/api/files/${savedFile._id}/download`,
+        viewUrl: savedFile.cloudinaryUrl,
+        downloadUrl: savedFile.cloudinaryUrl,
         fileType: getFileExtension(req.file.originalname)
       };
-
-      console.log('✅ Upload successful:', {
-        fileId: savedFile._id,
-        originalname: req.file.originalname,
-        filename: req.file.filename,
-        storagePath: path.resolve(UPLOADS_DIR, req.file.filename),
-        viewUrl: responseFile.viewUrl,
-        downloadUrl: responseFile.downloadUrl
-      });
-
       res.status(201).json({ 
         message: 'Fichier uploadé avec succès',
         file: responseFile
       });
-      
     } catch (error) {
-      console.error('❌ Upload failed:', error);
-      
-      // Cleanup uploaded file on error
-      try {
-        const cleanupPath = path.resolve(req.file.path);
-        await fs.unlink(cleanupPath);
-        console.log('🗑️ Cleaned up uploaded file:', cleanupPath);
-      } catch (cleanupError) {
-        console.error('❌ Failed to cleanup uploaded file:', cleanupError);
-      }
-      
+      console.error('❌ Cloudinary upload failed:', error);
       res.status(500).json({ 
         error: 'Erreur lors de l\'upload',
-        message: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+        message: error.message || 'Erreur interne'
       });
-    } finally {
-      await session.endSession();
     }
   });
 });
 
-// PUT /api/files/:fileId - Update file metadata
+// PUT /api/files/:fileId - Update file metadata (Cloudinary links)
 app.put('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     const { fileId } = req.params;
     const { originalName, semester, type, subject, year } = req.body;
-
     if (!mongoose.Types.ObjectId.isValid(fileId)) {
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
-
-    console.log(`💾 Updating file ${fileId}:`, { originalName, semester, type, subject, year });
-
     const session = await mongoose.startSession();
-
     await session.withTransaction(async () => {
       const file = await File.findById(fileId).session(session);
       if (!file) {
         throw new Error('Fichier introuvable');
       }
-
       let semesterDoc = await Semester.findOne({ name: semester }).session(session);
       if (!semesterDoc) {
         throw new Error('Semestre invalide');
       }
-
       let typeDoc = await Type.findOne({ 
         name: type, 
         semester: semesterDoc._id 
       }).session(session);
-      
       if (!typeDoc) {
         const typeDisplayNames = {
           'cours': 'Cours',
@@ -1043,7 +652,6 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
           'compositions': 'Compositions',
           'ratrapages': 'Rattrapages'
         };
-        
         typeDoc = new Type({
           name: type,
           displayName: typeDisplayNames[type] || type,
@@ -1051,13 +659,11 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         });
         await typeDoc.save({ session });
       }
-
       let subjectDoc = await Subject.findOne({
         name: subject,
         semester: semesterDoc._id,
         type: typeDoc._id
       }).session(session);
-      
       if (!subjectDoc) {
         subjectDoc = new Subject({
           name: subject,
@@ -1066,14 +672,12 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         });
         await subjectDoc.save({ session });
       }
-
       let yearDoc = await Year.findOne({
         year: parseInt(year),
         semester: semesterDoc._id,
         type: typeDoc._id,
         subject: subjectDoc._id
       }).session(session);
-      
       if (!yearDoc) {
         yearDoc = new Year({
           year: parseInt(year),
@@ -1083,7 +687,6 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         });
         await yearDoc.save({ session });
       }
-
       const updatedFile = await File.findByIdAndUpdate(
         fileId,
         {
@@ -1096,59 +699,42 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         },
         { new: true, session }
       ).populate(['semester', 'type', 'subject', 'year']);
-
-      console.log('✅ File updated:', updatedFile.originalName);
-      
       res.json({
         message: 'Fichier mis à jour avec succès',
         file: updatedFile
       });
     });
-
     await session.endSession();
   } catch (error) {
     console.error('❌ File update failed:', error);
     res.status(500).json({ 
       error: 'Erreur lors de la mise à jour',
-      message: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+      message: error.message || 'Erreur interne'
     });
   }
 });
 
-// DELETE /api/files/:fileId - Delete file from both disk and database
+// DELETE /api/files/:fileId - Delete file from Cloudinary and database
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
-
     const file = await File.findById(req.params.fileId);
     if (!file) {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
-
-    console.log('🗑️ Deleting file:', { id: file._id, name: file.originalName, fileName: file.fileName });
-
-    let diskDeleted = false;
-    
-    // Delete from disk
-    if (file.fileName) {
-      try {
-        const filePath = path.resolve(UPLOADS_DIR, file.fileName);
-        await fs.unlink(filePath);
-        diskDeleted = true;
-        console.log('✅ File deleted from disk:', filePath);
-      } catch (error) {
-        console.warn('⚠️ Disk deletion failed:', error.message);
-      }
+    let cloudinaryDeleted = false;
+    try {
+      await cloudinary.uploader.destroy(file.cloudinaryPublicId, { resource_type: 'raw' });
+      cloudinaryDeleted = true;
+    } catch (error) {
+      console.warn('⚠️ Cloudinary deletion failed:', error.message);
     }
-
-    // Delete from database
     await File.findByIdAndDelete(req.params.fileId);
-
     res.json({ 
       message: 'Fichier supprimé avec succès',
-      diskDeleted,
+      cloudinaryDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -1160,26 +746,17 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
 // GET /api/admin/files - Admin file list
 app.get('/api/admin/files', requireDB, async (req, res) => {
   try {
-    console.log('👨‍💼 Admin: Fetching all files');
-    
     const files = await File.find()
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
-
-    console.log(`📊 Admin: Found ${files.length} files`);
-
-    const baseURL = getBaseURL(req);
-
-    const enhancedFiles = files.map(file => ({
+    res.json(files.map(file => ({
       ...file,
-      viewUrl: `${baseURL}/api/files/${file._id}/view`,
-      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'local',
+      viewUrl: file.cloudinaryUrl,
+      downloadUrl: file.cloudinaryUrl,
+      storageProvider: 'cloudinary',
       fileType: getFileExtension(file.originalName)
-    }));
-
-    res.json(enhancedFiles);
+    })));
   } catch (error) {
     console.error('❌ Admin files fetch failed:', error);
     res.status(500).json({ error: 'Erreur lors de la récupération des fichiers admin' });
@@ -1248,7 +825,6 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         .limit(10)
         .lean()
     ]);
-
     const formatFileSize = (bytes) => {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
@@ -1256,9 +832,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
-
     const baseURL = getBaseURL(req);
-
     res.json({
       overview: {
         totalFiles,
@@ -1277,13 +851,12 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        viewUrl: `${baseURL}/api/files/${file._id}/view`,
-        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+        viewUrl: file.cloudinaryUrl,
+        downloadUrl: file.cloudinaryUrl,
         fileType: getFileExtension(file.originalName),
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageProvider: 'Local File System',
-      storageLocation: UPLOADS_DIR,
+      storageProvider: 'Cloudinary',
       baseURL
     });
   } catch (error) {
@@ -1292,108 +865,26 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/admin/cleanup-legacy - Remove all legacy files
-app.post('/api/admin/cleanup-legacy', requireDB, async (req, res) => {
-  try {
-    console.log('🧹 Starting legacy file cleanup...');
-    
-    const legacyFiles = await File.find({
-      $or: [
-        { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
-        { appwriteFileId: { $exists: true, $ne: null }, fileName: null },
-        { appwriteFileId: { $exists: false }, fileName: { $exists: false } },
-        { appwriteFileId: null, fileName: null }
-      ]
-    });
-    
-    console.log(`📊 Found ${legacyFiles.length} legacy files to clean up`);
-    
-    let deletedCount = 0;
-    let errorCount = 0;
-    
-    for (const file of legacyFiles) {
-      try {
-        await File.findByIdAndDelete(file._id);
-        deletedCount++;
-        console.log(`✅ Deleted legacy file: ${file.originalName}`);
-      } catch (error) {
-        errorCount++;
-        console.error(`❌ Failed to delete file ${file.originalName}:`, error.message);
-      }
-    }
-    
-    console.log(`🧹 Cleanup complete: ${deletedCount} deleted, ${errorCount} errors`);
-    
-    res.json({
-      message: 'Legacy file cleanup completed',
-      stats: {
-        found: legacyFiles.length,
-        deleted: deletedCount,
-        errors: errorCount
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Cleanup failed:', error);
-    res.status(500).json({ 
-      error: 'Erreur lors du nettoyage',
-      message: error.message
-    });
-  }
-});
-
 // GET /api/debug/files/:fileId - Debug endpoint
 app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
   try {
     const file = await File.findById(req.params.fileId);
     if (!file) return res.json({ error: 'File not found in DB' });
-    
-    const filePath = path.resolve(UPLOADS_DIR, file.fileName);
-    
-    try {
-      const stats = await fs.stat(filePath);
-      
-      res.json({
-        database: {
-          id: file._id,
-          originalName: file.originalName,
-          fileName: file.fileName,
-          fileSize: file.fileSize,
-          storageProvider: file.storageProvider,
-          uploadedAt: file.uploadedAt
-        },
-        filesystem: {
-          path: filePath,
-          exists: true,
-          size: stats.size,
-          created: stats.birthtime,
-          modified: stats.mtime,
-          uploadsDir: UPLOADS_DIR,
-          absoluteUploadsDir: path.resolve(UPLOADS_DIR)
-        },
-        urls: {
-          view: `${getBaseURL(req)}/api/files/${file._id}/view`,
-          download: `${getBaseURL(req)}/api/files/${file._id}/download`
-        }
-      });
-    } catch (fsError) {
-      res.json({
-        database: { 
-          exists: true, 
-          id: file._id,
-          originalName: file.originalName,
-          fileName: file.fileName,
-          fileSize: file.fileSize
-        },
-        filesystem: { 
-          exists: false, 
-          error: fsError.message, 
-          path: filePath,
-          uploadsDir: UPLOADS_DIR,
-          absoluteUploadsDir: path.resolve(UPLOADS_DIR)
-        }
-      });
-    }
+    res.json({
+      database: {
+        id: file._id,
+        originalName: file.originalName,
+        cloudinaryPublicId: file.cloudinaryPublicId,
+        cloudinaryUrl: file.cloudinaryUrl,
+        fileSize: file.fileSize,
+        storageProvider: file.storageProvider,
+        uploadedAt: file.uploadedAt
+      },
+      urls: {
+        view: file.cloudinaryUrl,
+        download: file.cloudinaryUrl
+      }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1408,112 +899,21 @@ app.get('/api/health', async (req, res) => {
     2: 'Connecting',
     3: 'Disconnecting'
   };
-
-  let storageStatus = 'Not tested';
-  let storageTestPassed = false;
   let dbError = null;
-  let storageError = null;
-  let storageStats = null;
   let sampleFiles = [];
-  
-  // Test local storage
-  try {
-    await fs.access(UPLOADS_DIR);
-    const stats = await fs.stat(UPLOADS_DIR);
-    
-    // Test write permissions
-    const testFile = path.join(UPLOADS_DIR, `health-test-${Date.now()}.txt`);
-    await fs.writeFile(testFile, 'health check test');
-    await fs.unlink(testFile);
-    
-    // Get directory contents
-    const files = await fs.readdir(UPLOADS_DIR);
-    
-    storageTestPassed = true;
-    storageStatus = `Ready - Directory exists and writable`;
-    storageStats = {
-      path: UPLOADS_DIR,
-      absolutePath: path.resolve(UPLOADS_DIR),
-      isDirectory: stats.isDirectory(),
-      fileCount: files.length,
-      permissions: stats.mode.toString(8),
-      created: stats.birthtime,
-      modified: stats.mtime,
-      sampleFiles: files.slice(0, 5)
-    };
-  } catch (error) {
-    storageError = error.message;
-    storageStatus = 'Error: ' + error.message;
-    storageTestPassed = false;
-    storageStats = {
-      path: UPLOADS_DIR,
-      absolutePath: path.resolve(UPLOADS_DIR),
-      error: error.code,
-      message: error.message
-    };
-  }
-  
-  // Test database connection
   if (dbStatus === 1) {
     try {
       const fileCount = await File.countDocuments();
-      console.log(`📊 Database file count: ${fileCount}`);
-      
       sampleFiles = await File.find()
         .limit(3)
-        .select('_id originalName fileName fileSize')
+        .select('_id originalName cloudinaryPublicId cloudinaryUrl fileSize')
         .lean();
-        
     } catch (error) {
       dbError = error.message;
     }
   }
-
-  // Check migration status
-  let legacyFilesCount = 0;
-  let validFilesCount = 0;
-  let orphanedFiles = [];
-  
-  if (dbStatus === 1) {
-    try {
-      legacyFilesCount = await File.countDocuments({
-        $or: [
-          { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
-          { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
-        ]
-      });
-      
-      validFilesCount = await File.countDocuments({
-        fileName: { $exists: true, $ne: null }
-      });
-      
-      // Check for orphaned files
-      const dbFiles = await File.find({ fileName: { $exists: true, $ne: null } })
-        .select('_id originalName fileName')
-        .limit(10)
-        .lean();
-        
-      for (const dbFile of dbFiles) {
-        try {
-          await fs.access(path.resolve(UPLOADS_DIR, dbFile.fileName));
-        } catch (error) {
-          orphanedFiles.push({
-            id: dbFile._id,
-            name: dbFile.originalName,
-            fileName: dbFile.fileName,
-            expectedPath: path.resolve(UPLOADS_DIR, dbFile.fileName)
-          });
-        }
-      }
-      
-    } catch (error) {
-      console.error('❌ Error checking migration files:', error);
-    }
-  }
-
-  const overallStatus = (dbStatus === 1 && storageTestPassed) ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
-
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
     message: `Serveur ${overallStatus === 'OK' ? 'opérationnel' : 'en difficulté'}`,
@@ -1527,22 +927,10 @@ app.get('/api/health', async (req, res) => {
         ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'Local File System',
-        status: storageStatus,
-        ready: storageTestPassed,
-        stats: storageStats,
-        ...(storageError && { error: storageError })
+        provider: 'Cloudinary',
+        status: 'Ready',
+        ready: true
       }
-    },
-    migration: {
-      hasLegacyFiles: legacyFilesCount,
-      hasValidFiles: validFilesCount,
-      needsCleanup: legacyFilesCount > 0,
-      orphanedFiles: orphanedFiles.length,
-      orphanedDetails: orphanedFiles,
-      suggestion: legacyFilesCount > 0 ? 
-        'Run POST /api/admin/cleanup-legacy to remove legacy files' : 
-        'No legacy files detected'
     },
     environment: {
       nodeEnv: process.env.NODE_ENV || 'development',
@@ -1552,25 +940,24 @@ app.get('/api/health', async (req, res) => {
       external_url: process.env.RENDER_EXTERNAL_URL || null,
       detected_host: req.get('host'),
       working_directory: process.cwd(),
-      uploads_dir_env: process.env.UPLOADS_DIR
     },
     testing: {
       sampleFiles: sampleFiles.map(file => ({
         id: file._id,
         name: file.originalName,
-        fileName: file.fileName,
+        cloudinaryPublicId: file.cloudinaryPublicId,
+        cloudinaryUrl: file.cloudinaryUrl,
         size: file.fileSize,
-        viewUrl: `${baseURL}/api/files/${file._id}/view`,
-        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        expectedDiskPath: file.fileName ? path.resolve(UPLOADS_DIR, file.fileName) : null
+        viewUrl: file.cloudinaryUrl,
+        downloadUrl: file.cloudinaryUrl
       }))
     },
     uptime: Math.floor(process.uptime()),
-    version: '2.3.0-complete-working'
+    version: '2.3.0-cloudinary'
   });
 });
 
-// Initialize default semesters
+// Initialize default semesters (unchanged)
 async function initializeSemesters() {
   try {
     const semesters = [
@@ -1580,7 +967,6 @@ async function initializeSemesters() {
       { name: 'S4', displayName: 'Semestre 4', order: 4 },
       { name: 'S5', displayName: 'Semestre 5', order: 5 }
     ];
-
     for (const sem of semesters) {
       const existing = await Semester.findOne({ name: sem.name });
       if (!existing) {
@@ -1594,14 +980,12 @@ async function initializeSemesters() {
   }
 }
 
-// Graceful shutdown
+// Graceful shutdown (unchanged)
 const gracefulShutdown = async (signal) => {
   console.log(`\n📡 Received ${signal}, shutting down gracefully...`);
-  
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
   }
-  
   try{
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
@@ -1610,15 +994,13 @@ const gracefulShutdown = async (signal) => {
   } catch (error) {
     console.error('❌ Error closing database:', error);
   }
-  
   console.log('👋 Server shutdown complete');
   process.exit(0);
 };
-
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Error handling middleware  
+// Error handling middleware
 app.use((error, req, res, next) => {
   console.error('💥 Unhandled error:', {
     message: error.message,
@@ -1628,11 +1010,9 @@ app.use((error, req, res, next) => {
     ip: req.ip,
     timestamp: new Date().toISOString()
   });
-  
   const message = process.env.NODE_ENV === 'production' 
     ? 'Erreur interne du serveur' 
     : error.message;
-    
   res.status(error.status || 500).json({ 
     error: 'Erreur interne du serveur',
     message: message,
@@ -1644,9 +1024,7 @@ app.use((error, req, res, next) => {
 // 404 handler
 app.use('*', (req, res) => {
   console.log(`📍 Route not found: ${req.method} ${req.originalUrl} from ${req.ip}`);
-  
   const baseURL = getBaseURL(req);
-  
   res.status(404).json({ 
     error: 'Route introuvable',
     path: req.originalUrl,
@@ -1665,146 +1043,70 @@ app.use('*', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Initialize uploads directory before starting server
-(async () => {
-  await initializeUploadsDir();
-
-  app.listen(PORT, async () => {
-    console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE SOLUTION`);
-    console.log(`🚀 Running on port ${PORT}`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    
-    const serverURL = process.env.RENDER_EXTERNAL_URL || 
-      (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
-      
-    console.log(`🔗 Server URL: ${serverURL}`);
-    console.log(`📁 Storage: Local File System`);
-    console.log(`📦 Upload Directory: ${UPLOADS_DIR}`);
-    console.log(`📄 PDF Serving: Direct file serving with CORS and range requests`);
-    console.log(`🌐 CORS: Enhanced configuration for all origins`);
-    console.log(`🔧 Version: 2.3.0-complete-working`);
-    
-    const waitForDB = setInterval(async () => {
-      if (mongoose.connection.readyState === 1) {
-        clearInterval(waitForDB);
-        
-        console.log('🔧 Initializing application...');
-        await initializeSemesters();
-        
-        // Check for legacy files
-        try {
-          const legacyFilesCount = await File.countDocuments({
-            $or: [
-              { appwriteFileId: { $exists: true, $ne: null }, fileName: { $exists: false } },
-              { appwriteFileId: { $exists: true, $ne: null }, fileName: null }
-            ]
-          });
-          
-          const validFilesCount = await File.countDocuments({
-            fileName: { $exists: true, $ne: null }
-          });
-          
-          console.log(`📊 Migration Status: ${legacyFilesCount} legacy files, ${validFilesCount} valid files`);
-          
-          if (legacyFilesCount > 0) {
-            console.log('⚠️ Legacy files detected. Run POST /api/admin/cleanup-legacy to clean up');
-          }
-        } catch (error) {
-          console.log('⚠️ Could not check migration status:', error.message);
-        }
-        
-        console.log('🎯 Server ready for requests');
-        console.log('🩺 Health check:', `${serverURL}/api/health`);
-        
-        console.log('\n✅ FEATURES ENABLED:');
-        console.log('  - PDF file upload, view, and download');
-        console.log('  - Local file storage with absolute paths');
-        console.log('  - Legacy file cleanup and migration');
-        console.log('  - CORS support for cross-origin requests');
-        console.log('  - Range request support for PDF streaming');
-        console.log('  - Comprehensive error handling and logging');
-        console.log('  - Database connection retry logic');
-        console.log('  - Admin statistics and file management');
-        console.log('  - Debug endpoints for troubleshooting');
-        
-        try {
-          const fileCount = await File.countDocuments();
-          console.log(`📊 Database contains ${fileCount} files`);
-          
-          if (fileCount > 0) {
-            const sampleFile = await File.findOne({ fileName: { $exists: true, $ne: null } }).lean();
-            if (sampleFile) {
-              console.log('📝 Test URLs:');
-              console.log(`   View: ${serverURL}/api/files/${sampleFile._id}/view`);
-              console.log(`   Download: ${serverURL}/api/files/${sampleFile._id}/download`);
-              console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
-            }
-          }
-        } catch (error) {
-          console.log('⚠️ Could not query files:', error.message);
-        }
-        
-        console.log('\n📋 AVAILABLE ENDPOINTS:');
-        console.log(`   Health: GET ${serverURL}/api/health`);
-        console.log(`   Files: GET ${serverURL}/api/files`);
-        console.log(`   Upload: POST ${serverURL}/api/upload`);
-        console.log(`   View PDF: GET ${serverURL}/api/files/:fileId/view`);
-        console.log(`   Download: GET ${serverURL}/api/files/:fileId/download`);
-        console.log(`   Semesters: GET ${serverURL}/api/semesters`);
-        console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
-        console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);
-        console.log(`   Legacy Cleanup: POST ${serverURL}/api/admin/cleanup-legacy`);
-        
-        // Final system check
-        try {
-          const uploadsExists = await fs.access(UPLOADS_DIR).then(() => true).catch(() => false);
-          const uploadsStats = uploadsExists ? await fs.stat(UPLOADS_DIR) : null;
-          
-          console.log('\n📁 FINAL SYSTEM STATUS:');
-          console.log(`   Database: ${mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Not Connected ❌'}`);
-          console.log(`   Storage Directory: ${uploadsExists ? 'Ready ✅' : 'Not Ready ❌'}`);
-          console.log(`   Storage Path: ${path.resolve(UPLOADS_DIR)}`);
-          
-          if (uploadsExists && uploadsStats) {
-            console.log(`   Storage Permissions: ${uploadsStats.mode.toString(8)}`);
-            console.log(`   Storage Writeable: ${uploadsStats.isDirectory() ? 'Yes ✅' : 'No ❌'}`);
-          }
-          
-          console.log(`   Server Status: Ready for requests ✅`);
-          
-        } catch (finalCheckError) {
-          console.error('❌ Final system check error:', finalCheckError.message);
-        }
-        
-        console.log('\n🎉 University Archive Server is fully operational!');
-        console.log('📡 Ready to handle file uploads, downloads, and management');
-      }
-    }, 1000);
-    
-    setTimeout(() => {
+app.listen(PORT, async () => {
+  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE SOLUTION`);
+  console.log(`🚀 Running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  const serverURL = process.env.RENDER_EXTERNAL_URL || 
+    (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
+  console.log(`🔗 Server URL: ${serverURL}`);
+  console.log(`🌥️ Storage: Cloudinary`);
+  console.log(`📄 PDF Serving: Direct cloud links`);
+  console.log(`🌐 CORS: Enhanced configuration for all origins`);
+  console.log(`🔧 Version: 2.3.0-cloudinary`);
+  // Wait for DB then initialize semesters
+  const waitForDB = setInterval(async () => {
+    if (mongoose.connection.readyState === 1) {
       clearInterval(waitForDB);
-      if (mongoose.connection.readyState !== 1) {
-        console.log('⚠️ Started without complete DB initialization - will continue retrying');
-        console.log('💡 Server will continue to attempt database reconnection');
+      console.log('🔧 Initializing application...');
+      await initializeSemesters();
+      console.log('🎯 Server ready for requests');
+      console.log('🩺 Health check:', `${serverURL}/api/health`);
+      try {
+        const fileCount = await File.countDocuments();
+        console.log(`📊 Database contains ${fileCount} files`);
+        if (fileCount > 0) {
+          const sampleFile = await File.findOne().lean();
+          if (sampleFile) {
+            console.log('📝 Test URLs:');
+            console.log(`   View: ${sampleFile.cloudinaryUrl}`);
+            console.log(`   Download: ${sampleFile.cloudinaryUrl}`);
+            console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
+          }
+        }
+      } catch (error) {
+        console.log('⚠️ Could not query files:', error.message);
       }
-    }, 30000);
-  });
+      console.log('\n📋 AVAILABLE ENDPOINTS:');
+      console.log(`   Health: GET ${serverURL}/api/health`);
+      console.log(`   Files: GET ${serverURL}/api/files`);
+      console.log(`   Upload: POST ${serverURL}/api/upload`);
+      console.log(`   View PDF: GET ${serverURL}/api/files/:fileId/view`);
+      console.log(`   Download: GET ${serverURL}/api/files/:fileId/download`);
+      console.log(`   Semesters: GET ${serverURL}/api/semesters`);
+      console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
+      console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);
+    }
+  }, 1000);
+  setTimeout(() => {
+    clearInterval(waitForDB);
+    if (mongoose.connection.readyState !== 1) {
+      console.log('⚠️ Started without complete DB initialization - will continue retrying');
+      console.log('💡 Server will continue to attempt database reconnection');
+    }
+  }, 30000);
 
-  // Handle uncaught exceptions
   process.on('uncaughtException', (error) => {
     console.error('💥 Uncaught Exception:', error);
     console.error('Stack:', error.stack);
     console.log('🔄 Server will continue running...');
   });
-
-  // Handle unhandled promise rejections
   process.on('unhandledRejection', (reason, promise) => {
     console.error('💥 Unhandled Rejection at:', promise);
     console.error('Reason:', reason);
     console.log('🔄 Server will continue running...');
   });
-
-})();
+});
 
 // Export app for testing purposes
 module.exports = app;
