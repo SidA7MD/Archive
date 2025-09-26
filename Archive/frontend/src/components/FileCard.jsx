@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileText, File, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle, ExternalLink } from 'lucide-react';
+import { Download, File, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, AlertCircle } from 'lucide-react';
 
 // API config for backend URLs
 export const API_CONFIG = {
@@ -23,8 +23,8 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Returns file download URL
-  const getFileURL = () => {
+  // Returns backend download endpoint
+  const getDownloadURL = () => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
     if (file._id) {
       return `${baseUrl}/api/files/${file._id}/download`;
@@ -32,23 +32,37 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     return null;
   };
 
-  // Unified function to handle file access (downloads automatically on mobile devices)
-  const handleFileAccess = () => {
+  // Download PDF 
+  const handleDownload = async () => {
+    setLoading(true); 
     setError(null);
-    setLoading(true);
     
     try {
-      const url = getFileURL();
-      if (!url) throw new Error('URL non disponible');
+      const url = getDownloadURL();
+      if (!url) throw new Error('URL de téléchargement non disponible');
       
-      // Open in new tab - will download or display depending on browser/device capabilities
-      window.open(url, '_blank', 'noopener,noreferrer');
+      // Create a temporary link element to trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.originalName || 'document.pdf'; 
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       
-      // Add small delay to show loading state
+      // Append to body temporarily
+      document.body.appendChild(link);
+      
+      // Trigger the download
+      link.click();
+      
+      // Clean up
+      document.body.removeChild(link);
+      
+      // Add a small delay to show loading state
       setTimeout(() => setLoading(false), 1000);
+      
     } catch (err) {
-      console.error('File access error:', err);
-      setError(`Impossible d'accéder au fichier: ${err.message}`);
+      console.error('Download error:', err);
+      setError(`Téléchargement impossible: ${err.message}`);
       setLoading(false);
     }
   };
@@ -161,7 +175,7 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     background: theme.gradient,
     color: 'white',
     boxShadow: `0 4px 15px ${theme.shadow}`,
-    marginTop: 'auto'
+    marginTop: 'auto',
   };
 
   // Add hover effect
@@ -194,14 +208,14 @@ export const FileCard = ({ file, apiBaseUrl }) => {
               ? `0 8px 25px ${theme.shadow}` 
               : `0 4px 15px ${theme.shadow}`,
           }}
-          onClick={handleFileAccess}
+          onClick={handleDownload}
           disabled={loading}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
-          title={`Ouvrir ${file.originalName}`}
+          title={`Télécharger ${file.originalName || 'le document'}`}
         >
-          <ExternalLink size={18} />
-          {loading ? 'Chargement...' : 'Ouvrir le document'}
+          <Download size={18} />
+          {loading ? 'Téléchargement...' : 'Télécharger'}
         </button>
       </div>
     </div>

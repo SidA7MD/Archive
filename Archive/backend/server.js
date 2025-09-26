@@ -10,6 +10,8 @@ require('dotenv').config();
 
 const { v2: cloudinary } = require('cloudinary');
 const { Readable } = require('stream');
+const https = require('https');
+const http = require('http');
 
 console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE');
 console.log('🌥️ Using Cloudinary for File Storage');
@@ -389,11 +391,12 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
+      
+    const baseURL = getBaseURL(req);
     res.json(files.map(file => ({
       ...file,
-      downloadUrl: `${getBaseURL(req)}/api/files/${file._id}/download`,
-      storageProvider: 'cloudinary',
-      fileType: getFileExtension(file.originalName)
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
+      fileType: 'pdf'
     })));
   } catch (error) {
     console.error('❌ Error fetching files:', error);
@@ -424,13 +427,13 @@ app.get('/api/files', requireDB, async (req, res) => {
         .lean(),
       File.countDocuments(filter)
     ]);
+    
     const baseURL = getBaseURL(req);
     res.json({
       files: files.map(file => ({
         ...file,
         downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-        storageProvider: 'cloudinary',
-        fileType: getFileExtension(file.originalName)
+        fileType: 'pdf'
       })),
       pagination: {
         page,
@@ -449,13 +452,14 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// GET /api/files/:fileId/download - Universal download solution for all devices
+// GET /api/files/:fileId/download - Universal file download
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   try {
     if (!mongoose.Types.ObjectId.isValid(fileId)) {
       return res.status(400).json({ error: 'ID de fichier invalide' });
     }
+    
     const file = await File.findById(fileId).lean();
     if (!file) {
       return res.status(404).json({ error: 'Fichier introuvable' });
@@ -465,52 +469,47 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
     const filename = ensurePdfExtension(file.originalName);
     console.log(`📥 Download request for: ${filename} (ID: ${fileId})`);
     
-    // Get the Cloudinary URL
-    const cloudinaryUrl = file.cloudinaryUrl;
-    
-    const https = require('https');
-    const http = require('http');
-    
     // Parse the Cloudinary URL
-    const parsedUrl = url.parse(cloudinaryUrl);
+    const parsedUrl = url.parse(file.cloudinaryUrl);
     const client = parsedUrl.protocol === 'https:' ? https : http;
     
+    // Create request options
     const requestOptions = {
       hostname: parsedUrl.hostname,
-      port: parsedUrl.port,
       path: parsedUrl.path,
       method: 'GET',
       headers: {
-        'User-Agent': 'University Archive Server'
+        'User-Agent': 'University Archive PDF Downloader'
       }
     };
     
-    console.log(`🔄 Requesting file from Cloudinary: ${cloudinaryUrl}`);
+    console.log(`🔄 Fetching file from Cloudinary: ${file.cloudinaryUrl}`);
     
-    // Create the request to Cloudinary
+    // Make the request to Cloudinary
     const request = client.request(requestOptions, (cloudinaryRes) => {
       if (cloudinaryRes.statusCode !== 200) {
         console.error(`❌ Cloudinary error: ${cloudinaryRes.statusCode}`);
-        return res.status(500).json({ error: 'Erreur lors du téléchargement du fichier depuis Cloudinary' });
+        return res.status(500).json({ error: 'Erreur lors du téléchargement du fichier' });
       }
       
-      // Set headers to force download with proper filename
+      // Set headers to force download with proper filename and MIME type
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-      res.setHeader('Cache-Control', 'no-cache');
       
+      // Add other important headers
       if (cloudinaryRes.headers['content-length']) {
         res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
       }
+      res.setHeader('Cache-Control', 'private, max-age=3600');
       
-      console.log(`✅ Streaming download response with filename: ${filename}`);
+      console.log(`✅ Streaming PDF file to client with filename: ${filename}`);
       
-      // Pipe the file data to the response
+      // Stream the file to the client
       cloudinaryRes.pipe(res);
     });
     
     request.on('error', (error) => {
-      console.error(`❌ Download request error: ${error.message}`);
+      console.error(`❌ Download error: ${error.message}`);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Erreur lors du téléchargement', message: error.message });
       }
@@ -526,7 +525,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
     request.end();
     
   } catch (error) {
-    console.error('❌ Download error:', error);
+    console.error(`❌ Download error: ${error.message}`);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Erreur lors du téléchargement' });
     }
@@ -627,13 +626,13 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           });
           await yearDoc.save({ session });
         }
-        // Create file document
+        // Create file document with ensured PDF extension
         const fileDoc = new File({
           originalName: ensurePdfExtension(req.file.originalname),
           cloudinaryPublicId: cloudinaryFile.public_id,
           cloudinaryUrl: cloudinaryFile.secure_url,
           fileSize: req.file.size,
-          mimeType: req.file.mimetype,
+          mimeType: 'application/pdf',
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
@@ -645,6 +644,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         await savedFile.populate(['semester', 'type', 'subject', 'year']);
       });
       await session.endSession();
+      
       const baseURL = getBaseURL(req);
       const responseFile = {
         ...savedFile.toObject(),
@@ -739,6 +739,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
+          mimeType: 'application/pdf',
           updatedAt: new Date()
         },
         { new: true, session }
@@ -800,11 +801,11 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       .populate(['semester', 'type', 'subject', 'year'])
       .sort({ uploadedAt: -1 })
       .lean();
+    
     const baseURL = getBaseURL(req);
     res.json(files.map(file => ({
       ...file,
       downloadUrl: `${baseURL}/api/files/${file._id}/download`,
-      storageProvider: 'cloudinary',
       fileType: 'pdf'
     })));
   } catch (error) {
@@ -928,6 +929,7 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
         cloudinaryUrl: file.cloudinaryUrl,
         fileSize: file.fileSize,
         storageProvider: file.storageProvider,
+        mimeType: file.mimeType || 'application/pdf',
         uploadedAt: file.uploadedAt
       },
       urls: {
@@ -1105,8 +1107,7 @@ app.listen(PORT, async () => {
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
   console.log(`🔗 Server URL: ${serverURL}`);
   console.log(`🌥️ Storage: Cloudinary`);
-  console.log(`📄 PDF Serving: Unified download system optimized for all devices`);
-  console.log(`🌐 CORS: Enhanced configuration for all origins`);
+  console.log(`📄 PDF Serving: Unified download system for all devices`);
   console.log(`🔧 Version: 3.0.0-unified-download`);
   
   // Wait for DB then initialize semesters
