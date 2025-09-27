@@ -5,25 +5,25 @@ const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const url = require('url');
+const fs = require('fs').promises;
+const fsSync = require('fs');
 require('dotenv').config();
 
-const { v2: cloudinary } = require('cloudinary');
-const { Readable } = require('stream');
-const https = require('https');
-const http = require('http');
-
-console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE');
-console.log('🌥️ Using Cloudinary for File Storage');
+console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - LOCAL STORAGE');
+console.log('💾 Using Local File Storage');
 
 const app = express();
 
-// Cloudinary configuration
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dnsudmg3p',
-  api_key: process.env.CLOUDINARY_API_KEY || '211427178253455',
-  api_secret: process.env.CLOUDINARY_API_SECRET || 'dLYmuWERn7Hfd_W8G80vZF4ETxU',
-});
+// Create uploads directory if it doesn't exist
+const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+const ensureUploadsDir = async () => {
+  try {
+    await fs.access(UPLOADS_DIR);
+  } catch (error) {
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    console.log('📁 Created uploads directory');
+  }
+};
 
 // Trust proxy for deployment platforms
 app.set('trust proxy', 1);
@@ -234,18 +234,18 @@ try {
   process.exit(1);
 }
 
-// File model schema for Cloudinary storage
+// File model schema for local storage
 const fileSchema = new mongoose.Schema({
   originalName: { type: String, required: true, index: true },
-  cloudinaryPublicId: { type: String, required: true },
-  cloudinaryUrl: { type: String, required: true },
+  fileName: { type: String, required: true }, // Unique filename on disk
+  filePath: { type: String, required: true }, // Full path to file
   fileSize: { type: Number, required: true, min: 0 },
   mimeType: { type: String, default: 'application/pdf' },
   semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
   type: { type: mongoose.Schema.Types.ObjectId, ref: 'Type', required: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
   year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year', required: true, index: true },
-  storageProvider: { type: String, default: 'cloudinary' },
+  storageProvider: { type: String, default: 'local' },
   uploadedAt: { type: Date, default: Date.now, index: true },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -253,8 +253,35 @@ fileSchema.index({ semester: 1, type: 1, subject: 1, year: 1 });
 fileSchema.index({ uploadedAt: -1 });
 File = mongoose.model('File', fileSchema);
 
-// Multer setup for memory storage
-const storage = multer.memoryStorage();
+// Generate unique filename
+const generateUniqueFilename = (originalName) => {
+  const sanitized = sanitizeFilename(originalName);
+  const timestamp = Date.now();
+  const randomSuffix = Math.random().toString(36).substring(2, 8);
+  const nameWithoutExt = path.parse(sanitized).name;
+  return `${nameWithoutExt}_${timestamp}_${randomSuffix}.pdf`;
+};
+
+// Multer setup for local disk storage
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      await ensureUploadsDir();
+      cb(null, UPLOADS_DIR);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename: (req, file, cb) => {
+    const uniqueFilename = generateUniqueFilename(file.originalname);
+    console.log('📄 Generating filename:', {
+      original: file.originalname,
+      unique: uniqueFilename
+    });
+    cb(null, uniqueFilename);
+  }
+});
+
 const fileFilter = (req, file, cb) => {
   console.log('📄 File upload filter:', {
     originalName: file.originalname,
@@ -267,6 +294,7 @@ const fileFilter = (req, file, cb) => {
     cb(new Error('Seuls les fichiers PDF sont autorisés'), false);
   }
 };
+
 const upload = multer({ 
   storage: storage,
   fileFilter: fileFilter,
@@ -296,7 +324,7 @@ const isMobileDevice = (req) => {
   return /Mobile|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
 };
 
-// CRITICAL: Enhanced filename sanitization that GUARANTEES .pdf extension
+// Enhanced filename sanitization that GUARANTEES .pdf extension
 function sanitizeFilename(filename) {
   if (!filename || typeof filename !== 'string') return 'document.pdf';
   
@@ -478,7 +506,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// FIXED PDF DOWNLOAD ROUTE - This is the critical fix
+// ENHANCED PDF DOWNLOAD ROUTE - Local file serving with guaranteed PDF extension
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   try {
@@ -491,133 +519,105 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
     
-    // CRITICAL: Force proper PDF filename
+    // Check if file exists on disk
+    try {
+      await fs.access(file.filePath);
+    } catch (error) {
+      console.error(`❌ File not found on disk: ${file.filePath}`);
+      return res.status(404).json({ error: 'Fichier introuvable sur le serveur' });
+    }
+    
+    // Get file stats
+    const stats = await fs.stat(file.filePath);
+    
+    // CRITICAL: Force proper PDF filename with extension
     const filename = sanitizeFilename(file.originalName);
     console.log(`📥 Download request for: ${filename} (Original: ${file.originalName}, ID: ${fileId})`);
     
-    // Parse the Cloudinary URL
-    const parsedUrl = url.parse(file.cloudinaryUrl);
-    const client = parsedUrl.protocol === 'https:' ? https : http;
+    // Handle Range requests for better download support
+    const range = req.headers.range;
+    const fileSize = stats.size;
     
-    // Create request options
-    const requestOptions = {
-      hostname: parsedUrl.hostname,
-      path: parsedUrl.path,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'University Archive PDF Downloader/3.2.0',
-        'Accept': 'application/pdf,*/*',
-        'Cache-Control': 'no-cache'
-      }
-    };
-    
-    console.log(`🔄 Fetching file from Cloudinary: ${file.cloudinaryUrl}`);
-    
-    // Make the request to Cloudinary
-    const request = client.request(requestOptions, (cloudinaryRes) => {
-      if (cloudinaryRes.statusCode !== 200) {
-        console.error(`❌ Cloudinary error: ${cloudinaryRes.statusCode} ${cloudinaryRes.statusMessage}`);
-        if (!res.headersSent) {
-          return res.status(500).json({ 
-            error: 'Erreur lors du téléchargement du fichier',
-            cloudinaryStatus: cloudinaryRes.statusCode 
-          });
-        }
-        return;
-      }
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
       
-      // CRITICAL HEADERS FOR PDF DOWNLOAD WITH EXTENSION
-      res.setHeader('Content-Type', 'application/pdf');
-      
-      // Create properly encoded filename - THIS IS THE KEY FIX
-      const encodedFilename = encodeURIComponent(filename);
-      const asciiFilename = filename.replace(/[^\x00-\x7F]/g, '_');
-      
-      // RFC 6266 compliant Content-Disposition header - FORCES .pdf extension
-      res.setHeader(
-        'Content-Disposition', 
-        `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`
-      );
-      
-      // Additional headers to ensure proper download behavior
-      if (cloudinaryRes.headers['content-length']) {
-        res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
-      }
-      
-      // Security and download optimization headers
-      res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Download-Options', 'noopen');
-      res.setHeader('Content-Security-Policy', "default-src 'none'");
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
       res.setHeader('Accept-Ranges', 'bytes');
-      
-      // CORS headers for cross-origin downloads
-      const origin = req.headers.origin;
-      if (origin) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      }
-      res.setHeader('Access-Control-Expose-Headers', 
-        'Content-Disposition, Content-Type, Content-Length, Cache-Control, Accept-Ranges'
-      );
-      
-      // Additional mobile-specific headers
-      if (isMobileDevice(req)) {
-        res.setHeader('Content-Transfer-Encoding', 'binary');
-        res.setHeader('X-Suggested-Filename', filename);
-        // Force download on mobile devices
-        res.setHeader('Content-Description', 'File Transfer');
-      }
-      
-      console.log(`✅ Streaming PDF file to client with filename: ${filename}`);
-      console.log(`📋 Critical headers set:`, {
-        contentType: res.getHeader('Content-Type'),
-        contentDisposition: res.getHeader('Content-Disposition'),
-        contentLength: res.getHeader('Content-Length'),
-        filename: filename,
-        isMobile: isMobileDevice(req)
-      });
-      
-      // Error handling for streaming
-      cloudinaryRes.on('error', (streamError) => {
-        console.error(`❌ Cloudinary stream error: ${streamError.message}`);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Erreur de streaming' });
-        } else {
-          res.destroy();
-        }
-      });
-      
-      res.on('error', (resError) => {
-        console.error(`❌ Response stream error: ${resError.message}`);
-        cloudinaryRes.destroy();
-      });
-      
-      // Stream the file content
-      cloudinaryRes.pipe(res);
+      res.setHeader('Content-Length', chunksize);
+    } else {
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+    
+    // CRITICAL HEADERS FOR PDF DOWNLOAD WITH EXTENSION
+    res.setHeader('Content-Type', 'application/pdf');
+    
+    // Create properly encoded filename - THIS IS THE KEY FIX
+    const encodedFilename = encodeURIComponent(filename);
+    const asciiFilename = filename.replace(/[^\x00-\x7F]/g, '_');
+    
+    // RFC 6266 compliant Content-Disposition header - FORCES .pdf extension
+    res.setHeader(
+      'Content-Disposition', 
+      `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`
+    );
+    
+    // Security and download optimization headers
+    res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Download-Options', 'noopen');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    
+    // CORS headers for cross-origin downloads
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    res.setHeader('Access-Control-Expose-Headers', 
+      'Content-Disposition, Content-Type, Content-Length, Cache-Control, Accept-Ranges'
+    );
+    
+    // Additional mobile-specific headers
+    if (isMobileDevice(req)) {
+      res.setHeader('Content-Transfer-Encoding', 'binary');
+      res.setHeader('X-Suggested-Filename', filename);
+      res.setHeader('Content-Description', 'File Transfer');
+    }
+    
+    console.log(`✅ Streaming PDF file to client with filename: ${filename}`);
+    console.log(`📋 Headers set:`, {
+      contentType: res.getHeader('Content-Type'),
+      contentDisposition: res.getHeader('Content-Disposition'),
+      contentLength: res.getHeader('Content-Length'),
+      filename: filename,
+      isMobile: isMobileDevice(req),
+      hasRange: !!range
     });
     
-    request.on('error', (error) => {
-      console.error(`❌ Download request error: ${error.message}`);
+    // Stream the file
+    const stream = fsSync.createReadStream(file.filePath, range ? {
+      start: parseInt(range.replace(/bytes=/, "").split("-")[0], 10),
+      end: range.includes('-') && range.split('-')[1] ? parseInt(range.split('-')[1], 10) : undefined
+    } : {});
+    
+    stream.on('error', (error) => {
+      console.error(`❌ File stream error: ${error.message}`);
       if (!res.headersSent) {
-        res.status(500).json({ 
-          error: 'Erreur lors du téléchargement', 
-          message: error.message 
-        });
+        res.status(500).json({ error: 'Erreur de lecture du fichier' });
       }
     });
     
-    request.on('timeout', () => {
-      console.error('❌ Download request timeout');
-      request.destroy();
-      if (!res.headersSent) {
-        res.status(408).json({ error: 'Timeout lors du téléchargement' });
-      }
+    res.on('error', (error) => {
+      console.error(`❌ Response stream error: ${error.message}`);
+      stream.destroy();
     });
     
-    // Set request timeout
-    request.setTimeout(30000);
-    request.end();
+    stream.pipe(res);
     
   } catch (error) {
     console.error(`❌ Download error: ${error.message}`);
@@ -631,7 +631,7 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   }
 });
 
-// POST /api/upload - Upload PDF to Cloudinary
+// POST /api/upload - Upload PDF to local storage
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
@@ -645,34 +645,22 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier PDF fourni' });
     }
+    
     const { semester, type, subject, year } = req.body || {};
     if (!semester || !type || !subject || !year) {
+      // Clean up uploaded file if validation fails
+      try {
+        await fs.unlink(req.file.path);
+      } catch (cleanupError) {
+        console.error('❌ Failed to cleanup file:', cleanupError);
+      }
       return res.status(400).json({
         error: 'Champs requis manquants',
         required: ['semester', 'type', 'subject', 'year']
       });
     }
 
-    // Upload to Cloudinary
     try {
-      const uploadStreamPromise = () => new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            resource_type: 'raw',
-            folder: 'pdfs',
-            public_id: `pdf-${Date.now()}-${Math.round(Math.random()*1e9)}`,
-            overwrite: false,
-          },
-          (error, result) => {
-            if (error) reject(error);
-            else resolve(result);
-          }
-        );
-        Readable.from(req.file.buffer).pipe(uploadStream);
-      });
-
-      const cloudinaryFile = await uploadStreamPromise();
-
       // Create database references
       const session = await mongoose.startSession();
       let savedFile;
@@ -725,18 +713,19 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           });
           await yearDoc.save({ session });
         }
+        
         // Create file document with properly sanitized filename
         const fileDoc = new File({
           originalName: sanitizeFilename(req.file.originalname),
-          cloudinaryPublicId: cloudinaryFile.public_id,
-          cloudinaryUrl: cloudinaryFile.secure_url,
+          fileName: req.file.filename,
+          filePath: req.file.path,
           fileSize: req.file.size,
           mimeType: 'application/pdf',
           semester: semesterDoc._id,
           type: typeDoc._id,
           subject: subjectDoc._id,
           year: yearDoc._id,
-          storageProvider: 'cloudinary',
+          storageProvider: 'local',
           uploadedAt: new Date()
         });
         savedFile = await fileDoc.save({ session });
@@ -755,7 +744,13 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
         file: responseFile
       });
     } catch (error) {
-      console.error('❌ Cloudinary upload failed:', error);
+      console.error('❌ Upload failed:', error);
+      // Clean up uploaded file if database operation fails
+      try {
+        await fs.unlink(req.file.path);
+      } catch (cleanupError) {
+        console.error('❌ Failed to cleanup file:', cleanupError);
+      }
       res.status(500).json({ 
         error: 'Erreur lors de l\'upload',
         message: error.message || 'Erreur interne'
@@ -864,7 +859,7 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
   }
 });
 
-// DELETE /api/files/:fileId - Delete file from Cloudinary and database
+// DELETE /api/files/:fileId - Delete file from local storage and database
 app.delete('/api/files/:fileId', requireDB, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
@@ -874,17 +869,17 @@ app.delete('/api/files/:fileId', requireDB, async (req, res) => {
     if (!file) {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
-    let cloudinaryDeleted = false;
+    let localFileDeleted = false;
     try {
-      await cloudinary.uploader.destroy(file.cloudinaryPublicId, { resource_type: 'raw' });
-      cloudinaryDeleted = true;
+      await fs.unlink(file.filePath);
+      localFileDeleted = true;
     } catch (error) {
-      console.warn('⚠️ Cloudinary deletion failed:', error.message);
+      console.warn('⚠️ Local file deletion failed:', error.message);
     }
     await File.findByIdAndDelete(req.params.fileId);
     res.json({ 
       message: 'Fichier supprimé avec succès',
-      cloudinaryDeleted,
+      localFileDeleted,
       databaseDeleted: true
     });
   } catch (error) {
@@ -1005,7 +1000,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
         fileType: 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
-      storageProvider: 'Cloudinary',
+      storageProvider: 'Local File System',
       baseURL
     });
   } catch (error) {
@@ -1025,21 +1020,40 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
     const encodedFilename = encodeURIComponent(sanitizedName);
     const asciiFilename = sanitizedName.replace(/[^\x00-\x7F]/g, '_');
     
+    // Check if file exists on disk
+    let fileExists = false;
+    let fileStats = null;
+    try {
+      fileStats = await fs.stat(file.filePath);
+      fileExists = true;
+    } catch (error) {
+      // File doesn't exist
+    }
+    
     res.json({
       database: {
         id: file._id,
         originalName: file.originalName,
         sanitizedName: sanitizedName,
-        cloudinaryPublicId: file.cloudinaryPublicId,
-        cloudinaryUrl: file.cloudinaryUrl,
+        fileName: file.fileName,
+        filePath: file.filePath,
         fileSize: file.fileSize,
         storageProvider: file.storageProvider,
         mimeType: file.mimeType || 'application/pdf',
         uploadedAt: file.uploadedAt
       },
+      fileSystem: {
+        exists: fileExists,
+        path: file.filePath,
+        stats: fileStats ? {
+          size: fileStats.size,
+          created: fileStats.birthtime,
+          modified: fileStats.mtime,
+          isFile: fileStats.isFile()
+        } : null
+      },
       urls: {
-        download: `${baseURL}/api/files/${file._id}/download`,
-        direct: file.cloudinaryUrl
+        download: `${baseURL}/api/files/${file._id}/download`
       },
       filenameHandling: {
         original: file.originalName,
@@ -1083,18 +1097,34 @@ app.get('/api/health', async (req, res) => {
   };
   let dbError = null;
   let sampleFiles = [];
+  let uploadsInfo = { exists: false, writable: false };
+  
+  // Check uploads directory
+  try {
+    await fs.access(UPLOADS_DIR, fsSync.constants.F_OK);
+    uploadsInfo.exists = true;
+    try {
+      await fs.access(UPLOADS_DIR, fsSync.constants.W_OK);
+      uploadsInfo.writable = true;
+    } catch (error) {
+      // Directory not writable
+    }
+  } catch (error) {
+    // Directory doesn't exist
+  }
+  
   if (dbStatus === 1) {
     try {
       const fileCount = await File.countDocuments();
       sampleFiles = await File.find()
         .limit(3)
-        .select('_id originalName cloudinaryPublicId cloudinaryUrl fileSize')
+        .select('_id originalName fileName filePath fileSize')
         .lean();
     } catch (error) {
       dbError = error.message;
     }
   }
-  const overallStatus = (dbStatus === 1) ? 'OK' : 'Warning';
+  const overallStatus = (dbStatus === 1 && uploadsInfo.exists && uploadsInfo.writable) ? 'OK' : 'Warning';
   const baseURL = getBaseURL(req);
   res.status(overallStatus === 'OK' ? 200 : 503).json({ 
     status: overallStatus,
@@ -1109,9 +1139,11 @@ app.get('/api/health', async (req, res) => {
         ...(dbError && { error: dbError })
       },
       storage: {
-        provider: 'Cloudinary',
-        status: 'Ready',
-        ready: true
+        provider: 'Local File System',
+        uploadsDir: UPLOADS_DIR,
+        exists: uploadsInfo.exists,
+        writable: uploadsInfo.writable,
+        ready: uploadsInfo.exists && uploadsInfo.writable
       }
     },
     environment: {
@@ -1122,20 +1154,21 @@ app.get('/api/health', async (req, res) => {
       external_url: process.env.RENDER_EXTERNAL_URL || null,
       detected_host: req.get('host'),
       working_directory: process.cwd(),
+      uploads_directory: UPLOADS_DIR
     },
     testing: {
       sampleFiles: sampleFiles.map(file => ({
         id: file._id,
         name: file.originalName,
         sanitizedName: sanitizeFilename(file.originalName),
-        cloudinaryPublicId: file.cloudinaryPublicId,
-        cloudinaryUrl: file.cloudinaryUrl,
+        fileName: file.fileName,
+        filePath: file.filePath,
         size: file.fileSize,
         downloadUrl: `${baseURL}/api/files/${file._id}/download`
       }))
     },
     uptime: Math.floor(process.uptime()),
-    version: '3.2.0-fixed-pdf-extension-guaranteed'
+    version: '4.0.0-local-storage-guaranteed-pdf-extension'
   });
 });
 
@@ -1159,6 +1192,28 @@ async function initializeSemesters() {
     console.log('📚 Semesters initialization completed');
   } catch (error) {
     console.error('❌ Semester initialization failed:', error);
+  }
+}
+
+// Cleanup orphaned files (files in database but not on disk)
+async function cleanupOrphanedFiles() {
+  try {
+    const files = await File.find({});
+    let orphanedCount = 0;
+    for (const file of files) {
+      try {
+        await fs.access(file.filePath);
+      } catch (error) {
+        console.log(`🗑️ Removing orphaned file record: ${file.originalName}`);
+        await File.findByIdAndDelete(file._id);
+        orphanedCount++;
+      }
+    }
+    if (orphanedCount > 0) {
+      console.log(`🧹 Cleaned up ${orphanedCount} orphaned file records`);
+    }
+  } catch (error) {
+    console.error('❌ Cleanup failed:', error);
   }
 }
 
@@ -1227,15 +1282,19 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE SOLUTION`);
+  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - LOCAL FILE STORAGE SOLUTION`);
   console.log(`🚀 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   const serverURL = process.env.RENDER_EXTERNAL_URL || 
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
   console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`🌥️ Storage: Cloudinary`);
+  console.log(`💾 Storage: Local File System`);
+  console.log(`📁 Uploads Directory: ${UPLOADS_DIR}`);
   console.log(`📄 PDF Download: GUARANTEED .pdf extension handling for ALL devices`);
-  console.log(`🔧 Version: 3.2.0-fixed-pdf-extension-guaranteed`);
+  console.log(`🔧 Version: 4.0.0-local-storage-guaranteed-pdf-extension`);
+  
+  // Ensure uploads directory exists
+  await ensureUploadsDir();
   
   // Wait for DB then initialize semesters
   const waitForDB = setInterval(async () => {
@@ -1243,6 +1302,7 @@ app.listen(PORT, async () => {
       clearInterval(waitForDB);
       console.log('🔧 Initializing application...');
       await initializeSemesters();
+      await cleanupOrphanedFiles();
       console.log('🎯 Server ready for requests');
       console.log('🩺 Health check:', `${serverURL}/api/health`);
       try {
@@ -1256,6 +1316,7 @@ app.listen(PORT, async () => {
             console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
             console.log(`   Original filename: ${sampleFile.originalName}`);
             console.log(`   Sanitized filename: ${sanitizeFilename(sampleFile.originalName)}`);
+            console.log(`   Local path: ${sampleFile.filePath}`);
           }
         }
       } catch (error) {
@@ -1269,7 +1330,13 @@ app.listen(PORT, async () => {
       console.log(`   Semesters: GET ${serverURL}/api/semesters`);
       console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
       console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);
-      console.log('\n🎯 CRITICAL FIX APPLIED: PDF files will now download with proper .pdf extension on ALL browsers and devices!');
+      console.log('\n🎯 LOCAL STORAGE IMPLEMENTATION:');
+      console.log('   ✅ No external dependencies (Cloudinary removed)');
+      console.log('   ✅ Direct file serving with proper headers');
+      console.log('   ✅ Range request support for better downloads');
+      console.log('   ✅ Guaranteed .pdf extension on ALL devices');
+      console.log('   ✅ Automatic cleanup of orphaned records');
+      console.log('   ✅ Mobile-optimized download headers');
     }
   }, 1000);
   
