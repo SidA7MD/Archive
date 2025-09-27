@@ -23,45 +23,135 @@ export const FileCard = ({ file, apiBaseUrl }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Returns backend download endpoint
+  // Enhanced download URL generation with debugging
   const getDownloadURL = () => {
     const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
-    if (file._id) {
-      return `${baseUrl}/api/files/${file._id}/download`;
+    
+    // Debug logging
+    console.log('FileCard Debug:', {
+      file,
+      fileId: file?._id,
+      baseUrl,
+      apiBaseUrl
+    });
+    
+    // Validate file object and ID
+    if (!file) {
+      console.error('No file object provided');
+      return null;
     }
-    return null;
+    
+    if (!file._id) {
+      console.error('File ID is missing or undefined:', file);
+      return null;
+    }
+    
+    // Construct the URL - HARDCODED "download" to prevent undefined
+    const downloadUrl = `${baseUrl}/api/files/${file._id}/download`;
+    console.log('Generated download URL:', downloadUrl);
+    
+    return downloadUrl;
   };
 
-  // Download PDF 
+  // Enhanced download function with better error handling
   const handleDownload = async () => {
     setLoading(true); 
     setError(null);
     
     try {
       const url = getDownloadURL();
-      if (!url) throw new Error('URL de téléchargement non disponible');
+      if (!url) {
+        throw new Error('URL de téléchargement non disponible - ID de fichier manquant');
+      }
       
-      // Create a temporary link element to trigger download
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = file.originalName || 'document.pdf'; 
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
+      console.log('Attempting download from URL:', url);
       
-      // Append to body temporarily
-      document.body.appendChild(link);
+      // Method 1: Try direct window.open first (better for mobile)
+      const downloadWindow = window.open(url, '_blank');
       
-      // Trigger the download
-      link.click();
-      
-      // Clean up
-      document.body.removeChild(link);
-      
-      // Add a small delay to show loading state
-      setTimeout(() => setLoading(false), 1000);
+      // Fallback method if popup blocked
+      setTimeout(() => {
+        if (!downloadWindow || downloadWindow.closed) {
+          console.log('Popup blocked, using link method');
+          
+          // Method 2: Create temporary link
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = file.originalName || 'document.pdf'; 
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          
+          // Add to DOM, click, then remove
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+        
+        setLoading(false);
+      }, 1000);
       
     } catch (err) {
       console.error('Download error:', err);
+      setError(`Téléchargement impossible: ${err.message}`);
+      setLoading(false);
+    }
+  };
+
+  // Alternative download method using fetch (for debugging)
+  const handleDownloadWithFetch = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const url = getDownloadURL();
+      if (!url) {
+        throw new Error('URL de téléchargement non disponible');
+      }
+
+      console.log('Fetching file from:', url);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/pdf,*/*',
+        },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Download failed:', response.status, errorText);
+        throw new Error(`Erreur serveur: ${response.status}`);
+      }
+
+      // Get filename from Content-Disposition header
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = file.originalName || 'document.pdf';
+      
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+
+      // Convert response to blob and download
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up
+      window.URL.revokeObjectURL(downloadUrl);
+      setLoading(false);
+
+    } catch (err) {
+      console.error('Fetch download error:', err);
       setError(`Téléchargement impossible: ${err.message}`);
       setLoading(false);
     }
@@ -105,6 +195,10 @@ export const FileCard = ({ file, apiBaseUrl }) => {
 
   const theme = getFileTheme(file.originalName || 'default');
   const fileIcon = getFileIcon(file.originalName || 'file.pdf');
+  const [hovered, setHovered] = useState(false);
+
+  // Check if file data is valid
+  const isValidFile = file && file._id;
 
   const containerStyles = {
     background: 'linear-gradient(145deg, #ffffff 0%, #f8fafc 100%)',
@@ -118,7 +212,8 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     minHeight: '200px',
     display: 'flex',
     flexDirection: 'column',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    opacity: isValidFile ? 1 : 0.6,
   };
 
   const headerStyles = {
@@ -165,21 +260,19 @@ export const FileCard = ({ file, apiBaseUrl }) => {
     border: 'none',
     fontWeight: '500',
     fontSize: '0.875rem',
-    cursor: loading ? 'not-allowed' : 'pointer',
+    cursor: (loading || !isValidFile) ? 'not-allowed' : 'pointer',
     transition: 'all 0.2s ease',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '0.5rem',
-    opacity: loading ? 0.6 : 1,
+    opacity: (loading || !isValidFile) ? 0.6 : 1,
     background: theme.gradient,
     color: 'white',
     boxShadow: `0 4px 15px ${theme.shadow}`,
     marginTop: 'auto',
+    transform: hovered ? 'translateY(-2px)' : 'translateY(0)',
   };
-
-  // Add hover effect
-  const [hovered, setHovered] = useState(false);
 
   return (
     <div style={containerStyles}>
@@ -188,35 +281,59 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <h3 style={titleStyles}>
-          {file.originalName || 'Document sans nom'}
+          {file?.originalName || 'Document sans nom'}
         </h3>
-        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
           <span>📊</span>
-          {formatFileSize(file.fileSize || 0)}
+          {formatFileSize(file?.fileSize || 0)}
         </div>
+        
+        {/* Debug info in development */}
+        {process.env.NODE_ENV === 'development' && (
+          <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginBottom: '0.5rem' }}>
+            ID: {file?._id || 'MISSING'} | URL: {getDownloadURL() || 'INVALID'}
+          </div>
+        )}
+        
+        {!isValidFile && (
+          <div style={errorStyles}>
+            <AlertCircle size={16} />
+            Fichier invalide - ID manquant
+          </div>
+        )}
+        
         {error && (
           <div style={errorStyles}>
             <AlertCircle size={16} />
             {error}
           </div>
         )}
-        <button
-          style={{
-            ...buttonStyles,
-            transform: hovered ? 'translateY(-2px)' : 'translateY(0)',
-            boxShadow: hovered 
-              ? `0 8px 25px ${theme.shadow}` 
-              : `0 4px 15px ${theme.shadow}`,
-          }}
-          onClick={handleDownload}
-          disabled={loading}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
-          title={`Télécharger ${file.originalName || 'le document'}`}
-        >
-          <Download size={18} />
-          {loading ? 'Téléchargement...' : 'Télécharger'}
-        </button>
+        
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
+          <button
+            style={buttonStyles}
+            onClick={handleDownload}
+            disabled={loading || !isValidFile}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            title={`Télécharger ${file?.originalName || 'le document'}`}
+          >
+            <Download size={18} />
+            {loading ? 'Téléchargement...' : 'Télécharger'}
+          </button>
+          
+          {/* Debug button - only in development */}
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              style={{ ...buttonStyles, background: '#6b7280', flex: '0 0 auto', width: 'auto', padding: '0.5rem' }}
+              onClick={handleDownloadWithFetch}
+              disabled={loading || !isValidFile}
+              title="Test avec Fetch"
+            >
+              🔧
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
