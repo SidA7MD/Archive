@@ -5,10 +5,13 @@ const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const url = require('url');
 require('dotenv').config();
 
 const { v2: cloudinary } = require('cloudinary');
 const { Readable } = require('stream');
+const https = require('https');
+const http = require('http');
 
 console.log('🚀 STARTING UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE');
 console.log('🌥️ Using Cloudinary for File Storage');
@@ -293,48 +296,44 @@ const isMobileDevice = (req) => {
   return /Mobile|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
 };
 
-// CRITICAL: Simplified filename sanitization that ensures .pdf extension
+// CRITICAL: Enhanced filename sanitization that GUARANTEES .pdf extension
 function sanitizeFilename(filename) {
   if (!filename || typeof filename !== 'string') return 'document.pdf';
   
-  // Remove dangerous characters and normalize
+  // Remove any path separators and dangerous characters
   let sanitized = filename
-    .replace(/[<>:"|?*\x00-\x1f]/g, '_') // Replace dangerous characters
-    .replace(/[/\\]/g, '_') // Replace path separators
-    .trim();
+    .replace(/[/\\]/g, '') // Remove path separators
+    .replace(/[<>:"|?*\x00-\x1f]/g, '_') // Replace dangerous and control characters
+    .replace(/^\.+/, '') // Remove leading dots
+    .replace(/\s+/g, '_') // Replace spaces with underscores
+    .trim(); // Remove whitespace
   
-  // Ensure .pdf extension
+  // Handle reserved names on Windows
+  const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'];
+  const nameWithoutExt = sanitized.replace(/\.[^.]*$/, '').toUpperCase();
+  if (reservedNames.includes(nameWithoutExt)) {
+    sanitized = `file_${sanitized}`;
+  }
+  
+  // FORCE .pdf extension - this is the critical part
   if (!sanitized.toLowerCase().endsWith('.pdf')) {
+    // Remove any existing extension and add .pdf
     const nameWithoutExt = sanitized.replace(/\.[^.]*$/, '');
     sanitized = `${nameWithoutExt || 'document'}.pdf`;
   }
   
-  // Fallback for empty names
+  // If filename is still empty or just extension, provide default
   if (!sanitized || sanitized === '.pdf' || sanitized.length < 5) {
     sanitized = 'document.pdf';
   }
   
+  // Limit filename length (most filesystems support 255 chars)
+  if (sanitized.length > 250) {
+    const nameWithoutExt = sanitized.slice(0, 246).replace(/\.[^.]*$/, '');
+    sanitized = `${nameWithoutExt}.pdf`;
+  }
+  
   return sanitized;
-}
-
-// CRITICAL: Generate Cloudinary download URL with proper transformations
-function generateDownloadUrl(cloudinaryPublicId, filename) {
-  const sanitizedFilename = sanitizeFilename(filename);
-  
-  // Generate Cloudinary URL with transformations that force download
-  const downloadUrl = cloudinary.url(cloudinaryPublicId, {
-    resource_type: 'raw',
-    flags: 'attachment', // This forces download instead of inline display
-    format: 'pdf', // Ensure PDF format
-    // Add filename to the URL path for better browser handling
-    public_id: cloudinaryPublicId
-  });
-  
-  // Add custom filename parameter for better browser handling
-  const urlWithFilename = `${downloadUrl}&filename=${encodeURIComponent(sanitizedFilename)}`;
-  
-  console.log(`🔗 Generated download URL: ${urlWithFilename} for file: ${sanitizedFilename}`);
-  return urlWithFilename;
 }
 
 // API ROUTES
@@ -419,9 +418,10 @@ app.get('/api/years/:yearId/files', requireDB, async (req, res) => {
       .sort({ uploadedAt: -1 })
       .lean();
       
+    const baseURL = getBaseURL(req);
     res.json(files.map(file => ({
       ...file,
-      downloadUrl: generateDownloadUrl(file.cloudinaryPublicId, file.originalName),
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
       fileType: 'pdf'
     })));
   } catch (error) {
@@ -458,7 +458,7 @@ app.get('/api/files', requireDB, async (req, res) => {
     res.json({
       files: files.map(file => ({
         ...file,
-        downloadUrl: generateDownloadUrl(file.cloudinaryPublicId, file.originalName),
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
         fileType: 'pdf'
       })),
       pagination: {
@@ -478,7 +478,7 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
-// FIXED: Direct Cloudinary redirect for optimal performance
+// FIXED PDF DOWNLOAD ROUTE - This is the critical fix
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
   try {
@@ -491,30 +491,143 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       return res.status(404).json({ error: 'Fichier introuvable' });
     }
     
-    console.log(`📥 Download request for: ${file.originalName} (ID: ${fileId})`);
+    // CRITICAL: Force proper PDF filename
+    const filename = sanitizeFilename(file.originalName);
+    console.log(`📥 Download request for: ${filename} (Original: ${file.originalName}, ID: ${fileId})`);
     
-    // Generate optimized Cloudinary download URL
-    const downloadUrl = generateDownloadUrl(file.cloudinaryPublicId, file.originalName);
+    // Parse the Cloudinary URL
+    const parsedUrl = url.parse(file.cloudinaryUrl);
+    const client = parsedUrl.protocol === 'https:' ? https : http;
     
-    // Set CORS headers before redirect
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
+    // Create request options
+    const requestOptions = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.path,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'University Archive PDF Downloader/3.2.0',
+        'Accept': 'application/pdf,*/*',
+        'Cache-Control': 'no-cache'
+      }
+    };
     
-    console.log(`🔄 Redirecting to Cloudinary: ${downloadUrl}`);
+    console.log(`🔄 Fetching file from Cloudinary: ${file.cloudinaryUrl}`);
     
-    // Redirect to Cloudinary URL with download transformations
-    // This is much more efficient than proxying through your server
-    res.redirect(302, downloadUrl);
+    // Make the request to Cloudinary
+    const request = client.request(requestOptions, (cloudinaryRes) => {
+      if (cloudinaryRes.statusCode !== 200) {
+        console.error(`❌ Cloudinary error: ${cloudinaryRes.statusCode} ${cloudinaryRes.statusMessage}`);
+        if (!res.headersSent) {
+          return res.status(500).json({ 
+            error: 'Erreur lors du téléchargement du fichier',
+            cloudinaryStatus: cloudinaryRes.statusCode 
+          });
+        }
+        return;
+      }
+      
+      // CRITICAL HEADERS FOR PDF DOWNLOAD WITH EXTENSION
+      res.setHeader('Content-Type', 'application/pdf');
+      
+      // Create properly encoded filename - THIS IS THE KEY FIX
+      const encodedFilename = encodeURIComponent(filename);
+      const asciiFilename = filename.replace(/[^\x00-\x7F]/g, '_');
+      
+      // RFC 6266 compliant Content-Disposition header - FORCES .pdf extension
+      res.setHeader(
+        'Content-Disposition', 
+        `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`
+      );
+      
+      // Additional headers to ensure proper download behavior
+      if (cloudinaryRes.headers['content-length']) {
+        res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
+      }
+      
+      // Security and download optimization headers
+      res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Download-Options', 'noopen');
+      res.setHeader('Content-Security-Policy', "default-src 'none'");
+      res.setHeader('Accept-Ranges', 'bytes');
+      
+      // CORS headers for cross-origin downloads
+      const origin = req.headers.origin;
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
+      res.setHeader('Access-Control-Expose-Headers', 
+        'Content-Disposition, Content-Type, Content-Length, Cache-Control, Accept-Ranges'
+      );
+      
+      // Additional mobile-specific headers
+      if (isMobileDevice(req)) {
+        res.setHeader('Content-Transfer-Encoding', 'binary');
+        res.setHeader('X-Suggested-Filename', filename);
+        // Force download on mobile devices
+        res.setHeader('Content-Description', 'File Transfer');
+      }
+      
+      console.log(`✅ Streaming PDF file to client with filename: ${filename}`);
+      console.log(`📋 Critical headers set:`, {
+        contentType: res.getHeader('Content-Type'),
+        contentDisposition: res.getHeader('Content-Disposition'),
+        contentLength: res.getHeader('Content-Length'),
+        filename: filename,
+        isMobile: isMobileDevice(req)
+      });
+      
+      // Error handling for streaming
+      cloudinaryRes.on('error', (streamError) => {
+        console.error(`❌ Cloudinary stream error: ${streamError.message}`);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Erreur de streaming' });
+        } else {
+          res.destroy();
+        }
+      });
+      
+      res.on('error', (resError) => {
+        console.error(`❌ Response stream error: ${resError.message}`);
+        cloudinaryRes.destroy();
+      });
+      
+      // Stream the file content
+      cloudinaryRes.pipe(res);
+    });
+    
+    request.on('error', (error) => {
+      console.error(`❌ Download request error: ${error.message}`);
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          error: 'Erreur lors du téléchargement', 
+          message: error.message 
+        });
+      }
+    });
+    
+    request.on('timeout', () => {
+      console.error('❌ Download request timeout');
+      request.destroy();
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Timeout lors du téléchargement' });
+      }
+    });
+    
+    // Set request timeout
+    request.setTimeout(30000);
+    request.end();
     
   } catch (error) {
     console.error(`❌ Download error: ${error.message}`);
-    res.status(500).json({ 
-      error: 'Erreur lors du téléchargement',
-      message: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
-    });
+    console.error('Stack:', error.stack);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Erreur lors du téléchargement',
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+      });
+    }
   }
 });
 
@@ -540,17 +653,15 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       });
     }
 
-    // CRITICAL: Upload to Cloudinary as raw resource for proper PDF handling
+    // Upload to Cloudinary
     try {
       const uploadStreamPromise = () => new Promise((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
           {
-            resource_type: 'raw', // CRITICAL: Use 'raw' for PDFs, not 'auto' or 'image'
-            folder: 'university-archive/pdfs',
+            resource_type: 'raw',
+            folder: 'pdfs',
             public_id: `pdf-${Date.now()}-${Math.round(Math.random()*1e9)}`,
             overwrite: false,
-            // Ensure the file maintains its PDF properties
-            format: 'pdf'
           },
           (error, result) => {
             if (error) reject(error);
@@ -561,7 +672,6 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       });
 
       const cloudinaryFile = await uploadStreamPromise();
-      console.log('✅ Cloudinary upload successful:', cloudinaryFile.public_id);
 
       // Create database references
       const session = await mongoose.startSession();
@@ -615,8 +725,7 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
           });
           await yearDoc.save({ session });
         }
-        
-        // Create file document with sanitized filename
+        // Create file document with properly sanitized filename
         const fileDoc = new File({
           originalName: sanitizeFilename(req.file.originalname),
           cloudinaryPublicId: cloudinaryFile.public_id,
@@ -635,9 +744,10 @@ app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
       });
       await session.endSession();
       
+      const baseURL = getBaseURL(req);
       const responseFile = {
         ...savedFile.toObject(),
-        downloadUrl: generateDownloadUrl(savedFile.cloudinaryPublicId, savedFile.originalName),
+        downloadUrl: `${baseURL}/api/files/${savedFile._id}/download`,
         fileType: 'pdf'
       };
       res.status(201).json({ 
@@ -734,11 +844,12 @@ app.put('/api/files/:fileId', requireDB, async (req, res) => {
         { new: true, session }
       ).populate(['semester', 'type', 'subject', 'year']);
       
+      const baseURL = getBaseURL(req);
       res.json({
         message: 'Fichier mis à jour avec succès',
         file: {
           ...updatedFile.toObject(),
-          downloadUrl: generateDownloadUrl(updatedFile.cloudinaryPublicId, updatedFile.originalName),
+          downloadUrl: `${baseURL}/api/files/${updatedFile._id}/download`,
           fileType: 'pdf'
         }
       });
@@ -790,9 +901,10 @@ app.get('/api/admin/files', requireDB, async (req, res) => {
       .sort({ uploadedAt: -1 })
       .lean();
     
+    const baseURL = getBaseURL(req);
     res.json(files.map(file => ({
       ...file,
-      downloadUrl: generateDownloadUrl(file.cloudinaryPublicId, file.originalName),
+      downloadUrl: `${baseURL}/api/files/${file._id}/download`,
       fileType: 'pdf'
     })));
   } catch (error) {
@@ -870,7 +982,7 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
-    
+    const baseURL = getBaseURL(req);
     res.json({
       overview: {
         totalFiles,
@@ -889,12 +1001,12 @@ app.get('/api/admin/stats', requireDB, async (req, res) => {
       })),
       recentUploads: recentUploads.map(file => ({
         ...file,
-        downloadUrl: generateDownloadUrl(file.cloudinaryPublicId, file.originalName),
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`,
         fileType: 'pdf',
         fileSizeFormatted: formatFileSize(file.fileSize || 0)
       })),
       storageProvider: 'Cloudinary',
-      baseURL: getBaseURL(req)
+      baseURL
     });
   } catch (error) {
     console.error('❌ Stats fetch failed:', error);
@@ -908,8 +1020,10 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
     const file = await File.findById(req.params.fileId);
     if (!file) return res.json({ error: 'File not found in DB' });
     
+    const baseURL = getBaseURL(req);
     const sanitizedName = sanitizeFilename(file.originalName);
-    const downloadUrl = generateDownloadUrl(file.cloudinaryPublicId, file.originalName);
+    const encodedFilename = encodeURIComponent(sanitizedName);
+    const asciiFilename = sanitizedName.replace(/[^\x00-\x7F]/g, '_');
     
     res.json({
       database: {
@@ -924,12 +1038,14 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
         uploadedAt: file.uploadedAt
       },
       urls: {
-        download: downloadUrl,
+        download: `${baseURL}/api/files/${file._id}/download`,
         direct: file.cloudinaryUrl
       },
       filenameHandling: {
         original: file.originalName,
         sanitized: sanitizedName,
+        encoded: encodedFilename,
+        ascii: asciiFilename,
         hasPdfExtension: sanitizedName.toLowerCase().endsWith('.pdf'),
         length: sanitizedName.length
       },
@@ -937,10 +1053,18 @@ app.get('/api/debug/files/:fileId', requireDB, async (req, res) => {
         isMobile: isMobileDevice(req),
         userAgent: req.headers['user-agent']
       },
-      cloudinaryTransformations: {
-        resourceType: 'raw',
-        flags: 'attachment',
-        format: 'pdf'
+      headers: {
+        expectedContentType: 'application/pdf',
+        expectedContentDisposition: `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`,
+        corsOrigin: req.headers.origin || '*'
+      },
+      testCases: {
+        'test.pdf': sanitizeFilename('test.pdf'),
+        'test': sanitizeFilename('test'),
+        'test.doc': sanitizeFilename('test.doc'),
+        'test<>file.pdf': sanitizeFilename('test<>file.pdf'),
+        '': sanitizeFilename(''),
+        'Structures AlgéBriques.pdf': sanitizeFilename('Structures AlgéBriques.pdf')
       }
     });
   } catch (error) {
@@ -1007,11 +1131,11 @@ app.get('/api/health', async (req, res) => {
         cloudinaryPublicId: file.cloudinaryPublicId,
         cloudinaryUrl: file.cloudinaryUrl,
         size: file.fileSize,
-        downloadUrl: generateDownloadUrl(file.cloudinaryPublicId, file.originalName)
+        downloadUrl: `${baseURL}/api/files/${file._id}/download`
       }))
     },
     uptime: Math.floor(process.uptime()),
-    version: '4.0.0-cloudinary-direct-download-optimized'
+    version: '3.2.0-fixed-pdf-extension-guaranteed'
   });
 });
 
@@ -1103,15 +1227,15 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, async () => {
-  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - CLOUDINARY DIRECT DOWNLOAD`);
+  console.log(`\n🎓 UNIVERSITY ARCHIVE SERVER - CLOUDINARY STORAGE SOLUTION`);
   console.log(`🚀 Running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   const serverURL = process.env.RENDER_EXTERNAL_URL || 
     (process.env.NODE_ENV === 'production' ? `https://archive-mi73.onrender.com` : `http://localhost:${PORT}`);
   console.log(`🔗 Server URL: ${serverURL}`);
-  console.log(`🌥️ Storage: Cloudinary with direct download optimization`);
-  console.log(`📄 PDF Download: Direct Cloudinary URLs with fl_attachment for guaranteed downloads`);
-  console.log(`🔧 Version: 4.0.0-cloudinary-direct-download-optimized`);
+  console.log(`🌥️ Storage: Cloudinary`);
+  console.log(`📄 PDF Download: GUARANTEED .pdf extension handling for ALL devices`);
+  console.log(`🔧 Version: 3.2.0-fixed-pdf-extension-guaranteed`);
   
   // Wait for DB then initialize semesters
   const waitForDB = setInterval(async () => {
@@ -1132,7 +1256,6 @@ app.listen(PORT, async () => {
             console.log(`   Debug: ${serverURL}/api/debug/files/${sampleFile._id}`);
             console.log(`   Original filename: ${sampleFile.originalName}`);
             console.log(`   Sanitized filename: ${sanitizeFilename(sampleFile.originalName)}`);
-            console.log(`   Direct Cloudinary URL: ${generateDownloadUrl(sampleFile.cloudinaryPublicId, sampleFile.originalName)}`);
           }
         }
       } catch (error) {
@@ -1142,16 +1265,11 @@ app.listen(PORT, async () => {
       console.log(`   Health: GET ${serverURL}/api/health`);
       console.log(`   Files: GET ${serverURL}/api/files`);
       console.log(`   Upload: POST ${serverURL}/api/upload`);
-      console.log(`   Download: GET ${serverURL}/api/files/:fileId/download (redirects to Cloudinary)`);
+      console.log(`   Download: GET ${serverURL}/api/files/:fileId/download`);
       console.log(`   Semesters: GET ${serverURL}/api/semesters`);
       console.log(`   Admin Stats: GET ${serverURL}/api/admin/stats`);
       console.log(`   Debug File: GET ${serverURL}/api/debug/files/:fileId`);
-      console.log('\n🎯 CRITICAL OPTIMIZATIONS APPLIED:');
-      console.log('   ✅ Upload as resource_type: "raw" for proper PDF handling');
-      console.log('   ✅ Generate Cloudinary URLs with fl_attachment for forced downloads');
-      console.log('   ✅ Direct redirect to Cloudinary (no server proxying)');
-      console.log('   ✅ Proper CORS headers for cross-origin requests');
-      console.log('   ✅ Mobile-optimized download behavior');
+      console.log('\n🎯 CRITICAL FIX APPLIED: PDF files will now download with proper .pdf extension on ALL browsers and devices!');
     }
   }, 1000);
   
