@@ -139,54 +139,60 @@ export const apiService = {
     }
   },
 
-  // Enhanced file URL methods with debugging
+  // FIXED: Enhanced file URL methods with proper validation
   getFileViewUrl: (file) => {
-    let url;
-    
-    if (file.viewUrl && file.viewUrl.startsWith('http')) {
-      // Already a full URL
-      url = file.viewUrl;
-    } else if (file.viewUrl && file.viewUrl.startsWith('/uploads')) {
-      // Relative path from backend
-      url = `${API_BASE_URL}${file.viewUrl}`;
-    } else if (file._id) {
-      // Use API view endpoint
-      url = `${API_BASE_URL}/api/files/${file._id}/view`;
-    } else if (file.filePath) {
-      // Direct file path
-      url = file.filePath.startsWith('http') ? file.filePath : `${API_BASE_URL}${file.filePath}`;
-    } else {
-      console.error('❌ Cannot determine file view URL:', file);
+    // Validate file object and required fields
+    if (!file) {
+      console.error('❌ getFileViewUrl: No file object provided');
       return null;
     }
-    
-    console.log('👁️ File view URL:', url);
+
+    if (!file._id) {
+      console.error('❌ getFileViewUrl: File missing _id field', file);
+      return null;
+    }
+
+    // ALWAYS use the download endpoint for viewing PDFs
+    const url = `${API_BASE_URL}/api/files/${file._id}/download`;
+    console.log('👁️ File view URL generated:', { 
+      fileId: file._id, 
+      fileName: file.originalName,
+      url 
+    });
     return url;
   },
 
   getFileDownloadUrl: (file) => {
-    let url;
-    
-    if (file.downloadUrl && file.downloadUrl.startsWith('http')) {
-      // Already a full URL
-      url = file.downloadUrl;
-    } else if (file._id) {
-      // Use API download endpoint (preferred)
-      url = `${API_BASE_URL}/api/files/${file._id}/download`;
-    } else if (file.filePath) {
-      // Direct file path
-      url = file.filePath.startsWith('http') ? file.filePath : `${API_BASE_URL}${file.filePath}`;
-    } else {
-      console.error('❌ Cannot determine file download URL:', file);
+    // Validate file object and required fields
+    if (!file) {
+      console.error('❌ getFileDownloadUrl: No file object provided');
       return null;
     }
-    
-    console.log('⬇️ File download URL:', url);
+
+    if (!file._id) {
+      console.error('❌ getFileDownloadUrl: File missing _id field', file);
+      return null;
+    }
+
+    // ALWAYS use the API download endpoint
+    const url = `${API_BASE_URL}/api/files/${file._id}/download`;
+    console.log('⬇️ File download URL generated:', { 
+      fileId: file._id, 
+      fileName: file.originalName,
+      url 
+    });
     return url;
   },
 
-  // Test file access
+  // FIXED: Validate file access with proper error handling
   testFileAccess: async (fileUrl) => {
+    if (!fileUrl) {
+      return {
+        accessible: false,
+        error: 'No URL provided'
+      };
+    }
+
     try {
       console.log('🧪 Testing file access:', fileUrl);
       const response = await fetch(fileUrl, {
@@ -213,7 +219,100 @@ export const apiService = {
         error: error.message
       };
     }
+  },
+
+  // NEW: Get file info by ID with validation
+  getFileInfo: async (fileId) => {
+    if (!fileId) {
+      throw new Error('File ID is required');
+    }
+
+    try {
+      console.log('🔍 Getting file info for ID:', fileId);
+      const response = await apiClient.get(`/api/debug/files/${fileId}`);
+      return response.data;
+    } catch (error) {
+      console.error('❌ Failed to get file info:', error);
+      throw error;
+    }
   }
+};
+
+// Enhanced file handlers with better error handling and validation
+export const createFileHandlers = (file) => {
+  // Validate file object upfront
+  if (!file || !file._id) {
+    console.error('❌ createFileHandlers: Invalid file object', file);
+    return {
+      handleView: () => alert('Invalid file: missing file ID'),
+      handleDownload: () => alert('Invalid file: missing file ID')
+    };
+  }
+
+  const handleView = async () => {
+    try {
+      console.log('👁️ Attempting to view file:', {
+        id: file._id,
+        name: file.originalName,
+        file: file
+      });
+      
+      const viewUrl = apiService.getFileViewUrl(file);
+      if (!viewUrl) {
+        throw new Error('Could not generate file URL - missing file ID');
+      }
+      
+      console.log('👁️ Opening file in new tab:', viewUrl);
+      
+      // For PDFs, open directly in new tab
+      const newWindow = window.open(viewUrl, '_blank', 'noopener,noreferrer');
+      if (!newWindow) {
+        throw new Error('Pop-up blocked. Please allow pop-ups and try again.');
+      }
+      
+    } catch (error) {
+      console.error('❌ View error:', error);
+      alert(`Cannot view file: ${error.message}`);
+    }
+  };
+
+  const handleDownload = async () => {
+    try {
+      console.log('⬇️ Attempting to download file:', {
+        id: file._id,
+        name: file.originalName,
+        file: file
+      });
+      
+      const downloadUrl = apiService.getFileDownloadUrl(file);
+      if (!downloadUrl) {
+        throw new Error('Could not generate download URL - missing file ID');
+      }
+      
+      console.log('⬇️ Downloading from:', downloadUrl);
+      
+      // Create download link with proper filename
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = file.originalName || `document_${file._id}.pdf`;
+      link.target = '_blank';
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      link.click();
+      
+      // Clean up
+      setTimeout(() => {
+        document.body.removeChild(link);
+      }, 100);
+      
+    } catch (error) {
+      console.error('❌ Download error:', error);
+      alert(`Cannot download file: ${error.message}`);
+    }
+  };
+
+  return { handleView, handleDownload };
 };
 
 // Debug utility to test backend connectivity
@@ -263,67 +362,26 @@ export const debugBackendConnection = async () => {
       totalFiles: filesResponse.total,
       sampleFile: filesResponse.files?.[0] || null
     };
+
+    // Test 4: If we have a sample file, test its download URL
+    if (results.tests.files.sampleFile) {
+      const sampleFile = results.tests.files.sampleFile;
+      const downloadUrl = apiService.getFileDownloadUrl(sampleFile);
+      const accessTest = await apiService.testFileAccess(downloadUrl);
+      results.tests.sampleFileAccess = {
+        fileId: sampleFile._id,
+        fileName: sampleFile.originalName,
+        downloadUrl,
+        accessible: accessTest.accessible,
+        status: accessTest.status
+      };
+    }
   } catch (error) {
     results.tests.files = { error: error.userMessage || error.message };
   }
   
   console.log('🔍 Debug results:', results);
   return results;
-};
-
-// Enhanced file handlers for your components
-export const createFileHandlers = (file, apiBaseUrl) => {
-  const handleView = async () => {
-    try {
-      console.log('👁️ Attempting to view file:', file.originalName);
-      
-      const viewUrl = apiService.getFileViewUrl(file);
-      if (!viewUrl) {
-        throw new Error('Could not determine file URL');
-      }
-      
-      // Test file accessibility first
-      const accessTest = await apiService.testFileAccess(viewUrl);
-      if (!accessTest.accessible) {
-        throw new Error(`File not accessible (${accessTest.status || 'Network Error'})`);
-      }
-      
-      console.log('👁️ Opening file in new tab:', viewUrl);
-      window.open(viewUrl, '_blank');
-      
-    } catch (error) {
-      console.error('❌ View error:', error);
-      alert(`Cannot view file: ${error.message}`);
-    }
-  };
-
-  const handleDownload = async () => {
-    try {
-      console.log('⬇️ Attempting to download file:', file.originalName);
-      
-      const downloadUrl = apiService.getFileDownloadUrl(file);
-      if (!downloadUrl) {
-        throw new Error('Could not determine download URL');
-      }
-      
-      console.log('⬇️ Downloading from:', downloadUrl);
-      
-      // Create download link
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = file.originalName || 'document.pdf';
-      link.target = '_blank';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-    } catch (error) {
-      console.error('❌ Download error:', error);
-      alert(`Cannot download file: ${error.message}`);
-    }
-  };
-
-  return { handleView, handleDownload };
 };
 
 export { API_BASE_URL };

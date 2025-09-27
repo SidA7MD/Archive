@@ -364,6 +364,103 @@ function sanitizeFilename(filename) {
   return sanitized;
 }
 
+// DEBUG MIDDLEWARE - Add this before other API routes
+app.all('/api/files*', (req, res, next) => {
+  console.log('📁 Files API Route Hit:', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    params: req.params,
+    query: req.query,
+    hasUndefined: req.originalUrl.includes('undefined'),
+    timestamp: new Date().toISOString()
+  });
+  next();
+});
+
+// DEBUG ROUTE - Catch malformed file URLs BEFORE the main download route
+app.get('/api/files/:fileId/:action?', requireDB, async (req, res, next) => {
+  const { fileId, action } = req.params;
+  
+  // Log the problematic request
+  console.log('🔍 File route debug:', {
+    fileId,
+    action,
+    isValidObjectId: mongoose.Types.ObjectId.isValid(fileId),
+    fullUrl: req.originalUrl,
+    method: req.method,
+    ip: req.ip,
+    userAgent: req.headers['user-agent']?.substring(0, 100)
+  });
+  
+  // Check for undefined or invalid fileId
+  if (!fileId || fileId === 'undefined' || fileId === 'null') {
+    return res.status(400).json({
+      error: 'Invalid file ID',
+      received: fileId,
+      message: 'File ID cannot be undefined, null, or empty',
+      timestamp: new Date().toISOString(),
+      suggestion: 'Check frontend file object for missing _id field',
+      debug: {
+        originalUrl: req.originalUrl,
+        params: req.params,
+        method: req.method
+      }
+    });
+  }
+  
+  // Check for invalid MongoDB ObjectId
+  if (!mongoose.Types.ObjectId.isValid(fileId)) {
+    return res.status(400).json({
+      error: 'Invalid MongoDB ObjectId format',
+      received: fileId,
+      message: 'File ID must be a valid 24-character hexadecimal string',
+      timestamp: new Date().toISOString(),
+      expectedFormat: '507f1f77bcf86cd799439011',
+      debug: {
+        originalUrl: req.originalUrl,
+        fileIdLength: fileId.length,
+        fileIdType: typeof fileId
+      }
+    });
+  }
+  
+  // Check for undefined action
+  if (action === 'undefined') {
+    return res.status(400).json({
+      error: 'Invalid action parameter',
+      received: action,
+      fileId: fileId,
+      message: 'Action parameter cannot be undefined',
+      timestamp: new Date().toISOString(),
+      validActions: ['download'],
+      suggestion: 'Use /api/files/' + fileId + '/download for downloads',
+      correctUrl: `/api/files/${fileId}/download`
+    });
+  }
+  
+  // If it's a valid download request, continue to existing handler
+  if (action === 'download') {
+    return next();
+  }
+  
+  // If no action specified, redirect to download
+  if (!action) {
+    console.log(`🔄 Redirecting to download: ${fileId}`);
+    return res.redirect(`/api/files/${fileId}/download`);
+  }
+  
+  // Unknown action
+  return res.status(400).json({
+    error: 'Unknown action',
+    received: action,
+    fileId: fileId,
+    validActions: ['download'],
+    message: 'Only download action is supported',
+    timestamp: new Date().toISOString(),
+    correctUrl: `/api/files/${fileId}/download`
+  });
+});
+
 // API ROUTES
 
 // GET /api/semesters
@@ -1337,6 +1434,7 @@ app.listen(PORT, async () => {
       console.log('   ✅ Guaranteed .pdf extension on ALL devices');
       console.log('   ✅ Automatic cleanup of orphaned records');
       console.log('   ✅ Mobile-optimized download headers');
+      console.log('   ✅ Enhanced debugging for undefined URL issues');
     }
   }, 1000);
   
