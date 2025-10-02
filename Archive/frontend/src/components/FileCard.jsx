@@ -32,10 +32,25 @@ export const FileCard = ({ file, apiBaseUrl }) => {
       return null;
     }
     
-    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
-    const url = `${baseUrl}/api/files/${file._id}/download`;
+    // Ensure _id is a valid string
+    const fileId = String(file._id).trim();
+    if (!fileId || fileId === 'undefined' || fileId === 'null') {
+      console.error('Invalid file._id value:', file._id);
+      return null;
+    }
     
-    console.log('Download URL generated:', url);
+    const baseUrl = apiBaseUrl || API_CONFIG.getBaseURL();
+    
+    // CRITICAL: Build URL without any undefined parts
+    const url = `${baseUrl}/api/files/${fileId}/download`;
+    
+    // Validation check - URL should NOT contain 'undefined'
+    if (url.includes('undefined') || url.includes('null')) {
+      console.error('Generated URL contains undefined/null:', url);
+      return null;
+    }
+    
+    console.log('✅ Valid download URL generated:', url);
     return url;
   };
 
