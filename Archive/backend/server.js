@@ -603,6 +603,87 @@ app.get('/api/files', requireDB, async (req, res) => {
   }
 });
 
+
+// CRITICAL: Add this BEFORE your /api/files/:fileId/download route
+// This catches malformed URLs with undefined/null
+
+app.get('/api/files/:fileId/:action?', (req, res, next) => {
+  const { fileId, action } = req.params;
+  
+  console.log('🔍 File route intercepted:', {
+    fileId,
+    action,
+    fullUrl: req.originalUrl,
+    query: req.query,
+    method: req.method
+  });
+  
+  // Block undefined/null in URL
+  if (fileId === 'undefined' || fileId === 'null' || !fileId) {
+    console.error('❌ Invalid fileId detected:', fileId);
+    return res.status(400).json({
+      error: 'Invalid file ID',
+      received: fileId,
+      message: 'File ID cannot be undefined or null',
+      hint: 'Check your frontend code - file._id might be missing',
+      url: req.originalUrl,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  if (action === 'undefined' || action === 'null') {
+    console.error('❌ Invalid action detected:', action);
+    return res.status(400).json({
+      error: 'Invalid action',
+      received: action,
+      fileId: fileId,
+      message: 'Action parameter cannot be undefined or null',
+      correctUrl: `/api/files/${fileId}/download`,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(fileId)) {
+    console.error('❌ Invalid ObjectId format:', fileId);
+    return res.status(400).json({
+      error: 'Invalid MongoDB ObjectId',
+      received: fileId,
+      expectedFormat: '24-character hexadecimal string',
+      example: '507f1f77bcf86cd799439011',
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // If action is missing, default to download
+  if (!action) {
+    console.log(`✅ No action specified, defaulting to download for: ${fileId}`);
+    req.params.action = 'download';
+  }
+  
+  // If action is 'download', proceed to download handler
+  if (action === 'download') {
+    console.log(`✅ Valid download request for file: ${fileId}`);
+    return next();
+  }
+  
+  // Unknown action
+  return res.status(400).json({
+    error: 'Unknown action',
+    received: action,
+    fileId: fileId,
+    validActions: ['download'],
+    correctUrl: `/api/files/${fileId}/download`,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Now your download route will only receive valid requests
+app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
+  // Your existing download code here
+  // ...
+});
+
 // ENHANCED PDF DOWNLOAD ROUTE - Local file serving with guaranteed PDF extension
 // ENHANCED PDF DOWNLOAD ROUTE - Replace the existing download route with this
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
