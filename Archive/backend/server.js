@@ -604,8 +604,10 @@ app.get('/api/files', requireDB, async (req, res) => {
 });
 
 // ENHANCED PDF DOWNLOAD ROUTE - Local file serving with guaranteed PDF extension
+// ENHANCED PDF DOWNLOAD ROUTE - Replace the existing download route with this
 app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
   const fileId = req.params.fileId;
+  
   try {
     if (!mongoose.Types.ObjectId.isValid(fileId)) {
       return res.status(400).json({ error: 'ID de fichier invalide' });
@@ -627,11 +629,15 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
     // Get file stats
     const stats = await fs.stat(file.filePath);
     
-    // CRITICAL: Force proper PDF filename with extension
-    const filename = sanitizeFilename(file.originalName);
-    console.log(`📥 Download request for: ${filename} (Original: ${file.originalName}, ID: ${fileId})`);
+    // CRITICAL: Ensure .pdf extension
+    let filename = sanitizeFilename(file.originalName);
+    if (!filename.toLowerCase().endsWith('.pdf')) {
+      filename = filename.replace(/\.[^.]*$/, '') + '.pdf';
+    }
     
-    // Handle Range requests for better download support
+    console.log(`📥 Download request - Sanitized filename: ${filename}`);
+    
+    // Handle Range requests
     const range = req.headers.range;
     const fileSize = stats.size;
     
@@ -650,84 +656,80 @@ app.get('/api/files/:fileId/download', requireDB, async (req, res) => {
       res.setHeader('Accept-Ranges', 'bytes');
     }
     
-    // CRITICAL HEADERS FOR PDF DOWNLOAD WITH EXTENSION
+    // CRITICAL: Proper Content-Type
     res.setHeader('Content-Type', 'application/pdf');
     
-    // Create properly encoded filename - THIS IS THE KEY FIX
-    const encodedFilename = encodeURIComponent(filename);
-    const asciiFilename = filename.replace(/[^\x00-\x7F]/g, '_');
+    // ENHANCED: RFC 6266 compliant filename encoding for ALL devices
+    const safeFilename = filename.replace(/[^\x20-\x7E]/g, '_'); // ASCII fallback
+    const utf8Filename = encodeURIComponent(filename).replace(/['()]/g, escape);
     
-    // RFC 6266 compliant Content-Disposition header - FORCES .pdf extension
+    // Multi-encoding approach for maximum compatibility
     res.setHeader(
-      'Content-Disposition', 
-      `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`
+      'Content-Disposition',
+      `attachment; filename="${safeFilename}"; filename*=UTF-8''${utf8Filename}`
     );
     
-    // Security and download optimization headers
-    res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
+    // MOBILE-SPECIFIC: Additional headers for mobile browsers
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Download-Options', 'noopen');
-    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
-    // CORS headers for cross-origin downloads
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-    res.setHeader('Access-Control-Expose-Headers', 
-      'Content-Disposition, Content-Type, Content-Length, Cache-Control, Accept-Ranges'
-    );
+    // Mobile device detection
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobile = /Mobile|Android|iPhone|iPad/i.test(userAgent);
     
-    // Additional mobile-specific headers
-    if (isMobileDevice(req)) {
+    if (isMobile) {
       res.setHeader('Content-Transfer-Encoding', 'binary');
       res.setHeader('X-Suggested-Filename', filename);
       res.setHeader('Content-Description', 'File Transfer');
     }
     
-    console.log(`✅ Streaming PDF file to client with filename: ${filename}`);
-    console.log(`📋 Headers set:`, {
-      contentType: res.getHeader('Content-Type'),
-      contentDisposition: res.getHeader('Content-Disposition'),
-      contentLength: res.getHeader('Content-Length'),
-      filename: filename,
-      isMobile: isMobileDevice(req),
-      hasRange: !!range
-    });
+    // CORS headers
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Expose-Headers', 
+        'Content-Disposition, Content-Type, Content-Length, X-Suggested-Filename'
+      );
+    }
+    
+    console.log(`✅ Serving: ${filename} (${fileSize} bytes) to ${isMobile ? 'MOBILE' : 'DESKTOP'}`);
     
     // Stream the file
-    const stream = fsSync.createReadStream(file.filePath, range ? {
+    const streamOptions = range ? {
       start: parseInt(range.replace(/bytes=/, "").split("-")[0], 10),
       end: range.includes('-') && range.split('-')[1] ? parseInt(range.split('-')[1], 10) : undefined
-    } : {});
+    } : {};
+    
+    const stream = fsSync.createReadStream(file.filePath, streamOptions);
     
     stream.on('error', (error) => {
-      console.error(`❌ File stream error: ${error.message}`);
+      console.error(`❌ Stream error: ${error.message}`);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Erreur de lecture du fichier' });
       }
     });
     
     res.on('error', (error) => {
-      console.error(`❌ Response stream error: ${error.message}`);
+      console.error(`❌ Response error: ${error.message}`);
       stream.destroy();
     });
     
     stream.pipe(res);
     
   } catch (error) {
-    console.error(`❌ Download error: ${error.message}`);
-    console.error('Stack:', error.stack);
+    console.error(`❌ Download error:`, error);
     if (!res.headersSent) {
       res.status(500).json({ 
         error: 'Erreur lors du téléchargement',
-        message: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+        message: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }
 });
-
 // POST /api/upload - Upload PDF to local storage
 app.post('/api/upload', uploadLimiter, requireDB, (req, res) => {
   upload.single('pdf')(req, res, async (err) => {
